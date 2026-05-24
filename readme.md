@@ -13,6 +13,7 @@ It is designed for modern runtimes and modern hosts:
 - accepts either a raw function or a script string
 - normalizes TypeScript and TSX/JSX with SWC before execution
 - supports `export default`, named exports and top-level `return`
+- preserves structured values like `Map`s and `Set`s across exports and return values
 - discovers the remote OS, login shell and available runtimes
 - executes plain argv-style commands without shell quoting surprises
 - supports globals injection for snippets
@@ -106,3 +107,4 @@ const result = await RemoteTarget.run('local', () => ({
 - `exec()` does not throw on non-zero exit codes. It returns the structured invocation result.
 - shell builtins still require an explicit shell invocation, for example `['pwsh', '-Command', 'echo hello']`.
 - JSX is normalized to a tiny built-in object-based runtime so simple TSX works without React.
+- exported and returned values preserve common structured types like `Map`, `Set`, `Date`, `URL`, `RegExp` and typed arrays.

@@ -75,6 +75,21 @@ test('run local string with exports and top-level return', async () => {
   })
   expect(result.returnValue).toBe(process.platform)
 })
+test('run local preserves maps and sets in exports and return values', async () => {
+  const result = await RemoteTarget.run('local', `
+    export const namedMap = new Map([['a', 1], ['b', 2]])
+    export const namedSet = new Set(['x', 'y'])
+    export default new Map([[1, new Set(['nested'])]])
+    return new Set(['result'])
+  `)
+  expect(result.exitCode).toBe(0)
+  expect(result.exports).toEqual({
+    default: new Map([[1, new Set(['nested'])]]),
+    namedMap: new Map([['a', 1], ['b', 2]]),
+    namedSet: new Set(['x', 'y']),
+  })
+  expect(result.returnValue).toEqual(new Set(['result']))
+})
 test('run local surfaces remote errors', async () => {
   try {
     await RemoteTarget.run('local', `
