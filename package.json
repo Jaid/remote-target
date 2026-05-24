@@ -16,7 +16,7 @@
     "url": "git+https://github.com/Jaid/remote-target.git"
   },
   "scripts": {
-    "test": "bun test --max-concurrency 1"
+    "test": "bun test --max-concurrency 1 ./test"
   },
   "devDependencies": {
     "bun-types": "^1.3.14",
