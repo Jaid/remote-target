@@ -1,22 +1,11 @@
+import type {NodePath, PluginObj} from '@babel/core'
 import type {NormalizedRunInput, RunInput} from './types.ts'
 
-import {parse} from '@babel/parser'
-import {transform} from '@swc/core'
+import {transformAsync, types as t} from '@babel/core'
+import transformReactJsx from '@babel/plugin-transform-react-jsx'
+import transformTypeScript from '@babel/plugin-transform-typescript'
 
 import {toJavaScriptLiteral} from './toJavaScriptLiteral.ts'
-
-type AstNode = {
-  [key: string]: unknown
-  end: number
-  start: number
-  type: string
-}
-
-type SourceReplacement = {
-  end: number
-  start: number
-  text: string
-}
 
 const parserPlugins = ['decorators-legacy', 'importAttributes', 'jsx', 'typescript'] as const
 const jsxFactoryName = '__remoteTargetJsx'
@@ -32,184 +21,110 @@ const ${jsxFactoryName} = (type, props, ...children) => {
     type,
   }
 }`
-function applyReplacements(source: string, replacements: Array<SourceReplacement>) {
-  let normalizedSource = source
-  for (const replacement of replacements.toSorted((left, right) => right.start - left.start)) {
-    normalizedSource = `${normalizedSource.slice(0, replacement.start)}${replacement.text}${normalizedSource.slice(replacement.end)}`
-  }
-  return normalizedSource
+
+const createReturnValueExpression = (returnValueKey: string, expression?: Parameters<typeof t.assignmentExpression>[2]) => {
+  return t.assignmentExpression(
+    '=',
+    t.memberExpression(t.identifier('globalThis'), t.stringLiteral(returnValueKey), true),
+    expression ?? t.unaryExpression('void', t.numericLiteral(0), true),
+  )
 }
-function getAstNode(value: unknown): AstNode | undefined {
-  if (!value || typeof value !== 'object') {
-    return
-  }
-  if (!Object.hasOwn(value, 'type') || !Object.hasOwn(value, 'start') || !Object.hasOwn(value, 'end')) {
-    return
-  }
-  const candidate = value as Record<string, unknown>
-  const {end, start, type} = candidate
-  if (typeof type !== 'string' || typeof start !== 'number' || typeof end !== 'number') {
-    return
-  }
-  return value as AstNode
+const isTopLevelReturnStatement = (path: NodePath) => {
+  return path.isReturnStatement() && !path.getFunctionParent()
 }
-function getAstNodes(value: unknown): Array<AstNode> {
-  if (!Array.isArray(value)) {
-    return []
-  }
-  return value.map(item => getAstNode(item)).filter((item): item is AstNode => item !== undefined)
+const hasModuleSyntax = (programPath: NodePath) => {
+  return programPath.isProgram() && programPath.node.body.some(statement => {
+    return t.isImportDeclaration(statement) || t.isExportAllDeclaration(statement) || t.isExportDefaultDeclaration(statement) || t.isExportNamedDeclaration(statement)
+  })
 }
-function hasModuleSyntax(statements: Array<AstNode>) {
-  return statements.some(statement => statement.type.startsWith('Export') || statement.type.startsWith('Import'))
-}
-function isFunctionLikeNode(node: AstNode | undefined) {
-  return node ? node.type === 'ArrowFunctionExpression' || node.type === 'ClassMethod' || node.type === 'ClassPrivateMethod' || node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression' || node.type === 'ObjectMethod' : false
-}
-function walkTopLevelStatements(statement: AstNode, visitReturn: (statement: AstNode) => void): void {
-  if (statement.type === 'ReturnStatement') {
-    visitReturn(statement)
-    return
-  }
-  if (statement.type === 'BlockStatement') {
-    for (const blockStatement of getAstNodes(statement.body)) {
-      walkTopLevelStatements(blockStatement, visitReturn)
-    }
-    return
-  }
-  if (statement.type === 'DoWhileStatement' || statement.type === 'ForInStatement' || statement.type === 'ForOfStatement' || statement.type === 'ForStatement' || statement.type === 'LabeledStatement' || statement.type === 'WhileStatement' || statement.type === 'WithStatement') {
-    const body = getAstNode(statement.body)
-    if (body) {
-      walkTopLevelStatements(body, visitReturn)
-    }
-    return
-  }
-  if (statement.type === 'IfStatement') {
-    const consequent = getAstNode(statement.consequent)
-    if (consequent) {
-      walkTopLevelStatements(consequent, visitReturn)
-    }
-    const alternate = getAstNode(statement.alternate)
-    if (alternate) {
-      walkTopLevelStatements(alternate, visitReturn)
-    }
-    return
-  }
-  if (statement.type === 'SwitchStatement') {
-    for (const switchCase of getAstNodes(statement.cases)) {
-      for (const consequent of getAstNodes(switchCase.consequent)) {
-        walkTopLevelStatements(consequent, visitReturn)
-      }
-    }
-    return
-  }
-  if (statement.type === 'TryStatement') {
-    const block = getAstNode(statement.block)
-    if (block) {
-      walkTopLevelStatements(block, visitReturn)
-    }
-    const handler = getAstNode(statement.handler)
-    const handlerBody = handler ? getAstNode(handler.body) : undefined
-    if (handlerBody) {
-      walkTopLevelStatements(handlerBody, visitReturn)
-    }
-    const finalizer = getAstNode(statement.finalizer)
-    if (finalizer) {
-      walkTopLevelStatements(finalizer, visitReturn)
-    }
-    return
-  }
-  if (statement.type === 'ExportNamedDeclaration' || statement.type === 'ExportDefaultDeclaration') {
-    const declaration = getAstNode(statement.declaration)
-    if (declaration && !isFunctionLikeNode(declaration) && declaration.type !== 'ClassDeclaration') {
-      walkTopLevelStatements(declaration, visitReturn)
-    }
-  }
-}
-function rewriteSourceForReturnValue(code: string, returnValueKey: string) {
-  const parsed = parse(code, {
-    allowAwaitOutsideFunction: true,
-    allowReturnOutsideFunction: true,
-    plugins: [...parserPlugins],
-    sourceType: 'module',
-  }) as {program?: {body?: unknown}}
-  const statements = getAstNodes(parsed.program?.body)
-  const replacements: Array<SourceReplacement> = []
-  let hasReturnValue = false
-  for (const statement of statements) {
-    walkTopLevelStatements(statement, returnStatement => {
-      const argument = getAstNode(returnStatement.argument)
-      hasReturnValue = true
-      if (argument) {
-        replacements.push({
-          end: argument.start,
-          start: returnStatement.start,
-          text: `globalThis[${toJavaScriptLiteral(returnValueKey)}] = `,
-        })
-        return
-      }
-      replacements.push({
-        end: returnStatement.end,
-        start: returnStatement.start,
-        text: `globalThis[${toJavaScriptLiteral(returnValueKey)}] = undefined`,
-      })
-    })
-  }
-  const hasExplicitReturnValue = replacements.length > 0
-  if (!hasExplicitReturnValue && !hasModuleSyntax(statements)) {
-    const expressionStatementIndex = statements.findLastIndex(statement => statement.type === 'ExpressionStatement')
-    const expressionStatement = expressionStatementIndex === -1 ? undefined : statements[expressionStatementIndex]
-    if (expressionStatement) {
-      const expression = getAstNode(expressionStatement.expression)
-      if (expression) {
-        hasReturnValue = true
-        replacements.push({
-          end: expressionStatement.end,
-          start: expressionStatement.start,
-          text: `globalThis[${toJavaScriptLiteral(returnValueKey)}] = (${code.slice(expression.start, expression.end)})`,
-        })
-      }
-    }
-  }
+const createReturnValuePlugin = (returnValueKey: string, state: {hasReturnValue: boolean}): PluginObj => {
   return {
-    code: applyReplacements(code, replacements),
-    hasReturnValue,
+    name: 'remote-target-return-value',
+    visitor: {
+      Program(programPath) {
+        let hasExplicitReturnValue = false
+        programPath.traverse({
+          ReturnStatement(path) {
+            if (!isTopLevelReturnStatement(path)) {
+              return
+            }
+            hasExplicitReturnValue = true
+            state.hasReturnValue = true
+            path.replaceWith(t.expressionStatement(createReturnValueExpression(returnValueKey, path.node.argument ? t.cloneNode(path.node.argument, true) : undefined)))
+            path.skip()
+          },
+        })
+        if (hasExplicitReturnValue || hasModuleSyntax(programPath)) {
+          return
+        }
+        const lastExpressionStatementPath = [...programPath.get('body')].reverse().find(statementPath => {
+          return !Array.isArray(statementPath) && statementPath.isExpressionStatement()
+        })
+        if (!lastExpressionStatementPath || Array.isArray(lastExpressionStatementPath) || !lastExpressionStatementPath.isExpressionStatement()) {
+          return
+        }
+        state.hasReturnValue = true
+        lastExpressionStatementPath.replaceWith(t.expressionStatement(createReturnValueExpression(returnValueKey, t.cloneNode(lastExpressionStatementPath.node.expression, true))))
+      },
+    },
+  }
+}
+const normalizeFunctionInput = (inputCode: string, returnValueKey: string) => {
+  return {
+    code: `globalThis[${toJavaScriptLiteral(returnValueKey)}] = await (${inputCode})()
+export default globalThis[${toJavaScriptLiteral(returnValueKey)}]`,
+    hasReturnValue: true,
   }
 }
 
 export const normalizeRunInput = async (input: RunInput): Promise<NormalizedRunInput> => {
   const inputCode = typeof input === 'function' ? input.toString() : input
   const returnValueKey = `__remoteTargetReturnValue_${crypto.randomUUID()}`
-  const rewrittenSource = typeof input === 'function' ? {
-    code: `globalThis[${toJavaScriptLiteral(returnValueKey)}] = await (${inputCode})()
-export default globalThis[${toJavaScriptLiteral(returnValueKey)}]`,
-    hasReturnValue: true,
-  } : rewriteSourceForReturnValue(inputCode, returnValueKey)
-  const transformed = await transform(`${jsxPrelude}
-${rewrittenSource.code}`, {
-    filename: 'remote-target-input.tsx',
-    jsc: {
-      parser: {
-        decorators: true,
-        dynamicImport: true,
-        syntax: 'typescript',
-        tsx: true,
-      },
-      target: 'es2022',
-      transform: {
-        react: {
-          pragma: jsxFactoryName,
-          pragmaFrag: jsxFragmentName,
-          runtime: 'classic',
-        },
-      },
-    },
-    module: {
-      type: 'es6',
-    },
-    sourceMaps: false,
-  })
-  return {
+  const rewrittenSource = typeof input === 'function'
+    ? normalizeFunctionInput(inputCode, returnValueKey)
+    : {
+      code: inputCode,
+      hasReturnValue: false,
+    }
+  const rewriteState = {
     hasReturnValue: rewrittenSource.hasReturnValue,
+  }
+  const transformed = await transformAsync(`${jsxPrelude}
+${rewrittenSource.code}`, {
+    babelrc: false,
+    configFile: false,
+    filename: 'remote-target-input.tsx',
+    parserOpts: {
+      allowAwaitOutsideFunction: true,
+      allowReturnOutsideFunction: true,
+      plugins: [...parserPlugins],
+    },
+    plugins: [
+      createReturnValuePlugin(returnValueKey, rewriteState),
+      [transformTypeScript, {
+        allExtensions: true,
+        allowDeclareFields: true,
+        allowNamespaces: true,
+        isTSX: true,
+        jsxPragma: jsxFactoryName,
+        jsxPragmaFrag: jsxFragmentName,
+        onlyRemoveTypeImports: false,
+        optimizeConstEnums: true,
+      }],
+      [transformReactJsx, {
+        pragma: jsxFactoryName,
+        pragmaFrag: jsxFragmentName,
+        runtime: 'classic',
+      }],
+    ],
+    sourceMaps: false,
+    sourceType: 'module',
+  })
+  if (!transformed?.code) {
+    throw new Error('Babel did not return transformed code.')
+  }
+  return {
+    hasReturnValue: rewriteState.hasReturnValue,
     inputCode,
     normalizedCode: transformed.code,
     returnValueKey,

@@ -11,7 +11,7 @@ It is designed for modern runtimes and modern hosts:
 ## Features
 
 - accepts either a raw function or a script string
-- normalizes TypeScript and TSX/JSX with SWC before execution
+- normalizes TypeScript and TSX/JSX with Babel before execution
 - supports `export default`, named exports and top-level `return`
 - preserves structured values like `Map`s and `Set`s across exports and return values
 - injects globals through `serialize-javascript`, including self-contained functions and values like `Map`, `Set`, `Date`, `URL`, `RegExp` and `BigInt`
