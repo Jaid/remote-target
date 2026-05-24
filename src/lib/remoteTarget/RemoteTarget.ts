@@ -8,6 +8,7 @@ import {LocalTargetTransport} from './LocalTargetTransport.ts'
 import {normalizeRunInput} from './normalize.ts'
 import {deserializeTransportValue, serializeRemoteError, serializeTransportValue} from './serialize.ts'
 import {SshTargetTransport} from './SshTargetTransport.ts'
+import {toJavaScriptLiteral} from './toJavaScriptLiteral.ts'
 
 const supportedRuntimeNames = ['bun', 'node', 'deno'] as const satisfies Array<RuntimeName>
 
@@ -83,8 +84,8 @@ import {spawn} from 'node:child_process'
 
 ${serializationPrelude}
 
-const command = ${JSON.stringify(command)}
-const marker = ${JSON.stringify(marker)}
+const command = ${toJavaScriptLiteral(command)}
+const marker = ${toJavaScriptLiteral(marker)}
 const startedAt = Date.now()
 
 const emit = payload => console.log(marker + JSON.stringify(payload))
@@ -135,13 +136,13 @@ const buildRunWrapper = (normalizedCode: string, globals: Record<string, unknown
   return String.raw`
 ${serializationPrelude}
 
-const marker = ${JSON.stringify(marker)}
-const returnValueKey = ${JSON.stringify(returnValueKey)}
-const moduleUrl = ${JSON.stringify(`data:text/javascript;base64,${encodedModule}`)}
+const marker = ${toJavaScriptLiteral(marker)}
+const returnValueKey = ${toJavaScriptLiteral(returnValueKey)}
+const moduleUrl = ${toJavaScriptLiteral(`data:text/javascript;base64,${encodedModule}`)}
 
 const emit = payload => console.log(marker + JSON.stringify(payload))
 
-Object.assign(globalThis, ${JSON.stringify(globals)})
+Object.assign(globalThis, ${toJavaScriptLiteral(globals)})
 delete globalThis[returnValueKey]
 
 try {

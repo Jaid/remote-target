@@ -14,6 +14,7 @@ It is designed for modern runtimes and modern hosts:
 - normalizes TypeScript and TSX/JSX with SWC before execution
 - supports `export default`, named exports and top-level `return`
 - preserves structured values like `Map`s and `Set`s across exports and return values
+- injects globals through `serialize-javascript`, including self-contained functions and values like `Map`, `Set`, `Date`, `URL`, `RegExp` and `BigInt`
 - discovers the remote OS, login shell and available runtimes
 - executes plain argv-style commands without shell quoting surprises
 - supports globals injection for snippets
@@ -108,3 +109,4 @@ const result = await RemoteTarget.run('local', () => ({
 - shell builtins still require an explicit shell invocation, for example `['pwsh', '-Command', 'echo hello']`.
 - JSX is normalized to a tiny built-in object-based runtime so simple TSX works without React.
 - exported and returned values preserve common structured types like `Map`, `Set`, `Date`, `URL`, `RegExp` and typed arrays.
+- globals are embedded as JavaScript source, not as installed dependencies – imported module namespace objects and closure-dependent functions are still not portable. Import packages inside the remote script when needed.

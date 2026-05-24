@@ -3,6 +3,8 @@ import type {NormalizedRunInput, RunInput} from './types.ts'
 import {parse} from '@babel/parser'
 import {transform} from '@swc/core'
 
+import {toJavaScriptLiteral} from './toJavaScriptLiteral.ts'
+
 type AstNode = {
   [key: string]: unknown
   end: number
@@ -141,14 +143,14 @@ function rewriteSourceForReturnValue(code: string, returnValueKey: string) {
         replacements.push({
           end: argument.start,
           start: returnStatement.start,
-          text: `globalThis[${JSON.stringify(returnValueKey)}] = `,
+          text: `globalThis[${toJavaScriptLiteral(returnValueKey)}] = `,
         })
         return
       }
       replacements.push({
         end: returnStatement.end,
         start: returnStatement.start,
-        text: `globalThis[${JSON.stringify(returnValueKey)}] = undefined`,
+        text: `globalThis[${toJavaScriptLiteral(returnValueKey)}] = undefined`,
       })
     })
   }
@@ -163,7 +165,7 @@ function rewriteSourceForReturnValue(code: string, returnValueKey: string) {
         replacements.push({
           end: expressionStatement.end,
           start: expressionStatement.start,
-          text: `globalThis[${JSON.stringify(returnValueKey)}] = (${code.slice(expression.start, expression.end)})`,
+          text: `globalThis[${toJavaScriptLiteral(returnValueKey)}] = (${code.slice(expression.start, expression.end)})`,
         })
       }
     }
@@ -178,8 +180,8 @@ export const normalizeRunInput = async (input: RunInput): Promise<NormalizedRunI
   const inputCode = typeof input === 'function' ? input.toString() : input
   const returnValueKey = `__remoteTargetReturnValue_${crypto.randomUUID()}`
   const rewrittenSource = typeof input === 'function' ? {
-    code: `globalThis[${JSON.stringify(returnValueKey)}] = await (${inputCode})()
-export default globalThis[${JSON.stringify(returnValueKey)}]`,
+    code: `globalThis[${toJavaScriptLiteral(returnValueKey)}] = await (${inputCode})()
+export default globalThis[${toJavaScriptLiteral(returnValueKey)}]`,
     hasReturnValue: true,
   } : rewriteSourceForReturnValue(inputCode, returnValueKey)
   const transformed = await transform(`${jsxPrelude}

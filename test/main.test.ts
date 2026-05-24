@@ -117,6 +117,36 @@ test('run local string with globals injection', async () => {
     default: 'abc123',
   })
 })
+test('run local string with structured globals injection', async () => {
+  const remoteTarget = new RemoteTarget('local', {
+    globals: {
+      amount: 5n,
+      double: (value: bigint) => value * 2n,
+      lookup: new Map([['a', 3]]),
+      pattern: /abc/iu,
+      releasedAt: new Date('2024-01-02T03:04:05.000Z'),
+      tags: new Set(['x', 'y']),
+      website: new URL('https://example.com/demo'),
+    },
+  })
+  const result = await remoteTarget.run(`
+    export const href = website.href
+    export const iso = releasedAt.toISOString()
+    export const mapValue = lookup.get('a')
+    export const matched = pattern.test('---AbC---')
+    export const setValue = tags.has('x')
+    return double(amount)
+  `)
+  expect(result.exitCode).toBe(0)
+  expect(result.exports).toEqual({
+    href: 'https://example.com/demo',
+    iso: '2024-01-02T03:04:05.000Z',
+    mapValue: 3,
+    matched: true,
+    setValue: true,
+  })
+  expect(result.returnValue).toBe(10n)
+})
 test('run local TSX without React', async () => {
   const result = await RemoteTarget.run('local', `
     export default <section className="demo">hello</section>

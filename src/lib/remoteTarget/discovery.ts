@@ -1,6 +1,8 @@
 import type {TargetTransport} from './base/TargetTransport.ts'
 import type {DiscoveryInfo, LinuxDistribution, OsInfo, RuntimeInfo, RuntimeName, ShellInfo, ShellName} from './types.ts'
 
+import {toJavaScriptLiteral} from './toJavaScriptLiteral.ts'
+
 const runtimeVersionArguments: Record<RuntimeName, Array<string>> = {
   bun: ['--version'],
   deno: ['--version'],
@@ -100,7 +102,7 @@ import os from 'node:os'
 import process from 'node:process'
 import {spawnSync} from 'node:child_process'
 
-const runtimeCandidates = ${JSON.stringify(runtimeCandidates)}
+const runtimeCandidates = ${toJavaScriptLiteral(runtimeCandidates)}
 const currentRuntimeName = typeof Bun === 'object'
   ? 'bun'
   : typeof Deno === 'object'
