@@ -4,10 +4,10 @@ import type {DiscoveryInfo, ExecResult, RemoteTargetConstructorOptions, RemoteTa
 import optis from 'optis'
 
 import {discoverTarget, discoverWithoutRuntime, getRuntimeCommand, probeBootstrapRuntime} from './discovery.ts'
-import {LocalTargetTransport} from './LocalTargetTransport.ts'
+import {LocalTargetTransport} from '../transport/LocalTargetTransport.ts'
 import {normalizeRunInput} from './normalize.ts'
 import {deserializeTransportValue, serializeRemoteError, serializeTransportValue} from './serialize.ts'
-import {SshTargetTransport} from './SshTargetTransport.ts'
+import {SshTargetTransport} from '../transport/SshTargetTransport.ts'
 import {toJavaScriptLiteral} from './toJavaScriptLiteral.ts'
 
 const supportedRuntimeNames = ['bun', 'node', 'deno'] as const satisfies Array<RuntimeName>
