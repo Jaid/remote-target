@@ -1,13 +1,15 @@
-import type {NodePath, PluginObj} from '@babel/core'
 import type {NormalizedRunInput, RunInput} from './types.ts'
+import type {NodePath, PluginObj} from '@babel/core'
 
-import {transformAsync, types as t} from '@babel/core'
-import transformReactJsx from '@babel/plugin-transform-react-jsx'
-import transformTypeScript from '@babel/plugin-transform-typescript'
+import {createRequire} from 'node:module'
 
 import {toJavaScriptLiteral} from './toJavaScriptLiteral.ts'
 
+const moduleRequire = createRequire(import.meta.url)
+const {transformAsync, types: t} = moduleRequire('@babel/core') as typeof import('@babel/core')
 const parserPlugins = ['decorators-legacy', 'importAttributes', 'jsx', 'typescript'] as const
+const transformReactJsxPluginName = '@babel/plugin-transform-react-jsx'
+const transformTypeScriptPluginName = '@babel/plugin-transform-typescript'
 const jsxFactoryName = '__remoteTargetJsx'
 const jsxFragmentName = '__remoteTargetFragment'
 const jsxPrelude = `const ${jsxFragmentName} = Symbol.for('remote-target.fragment')
@@ -21,13 +23,8 @@ const ${jsxFactoryName} = (type, props, ...children) => {
     type,
   }
 }`
-
 const createReturnValueExpression = (returnValueKey: string, expression?: Parameters<typeof t.assignmentExpression>[2]) => {
-  return t.assignmentExpression(
-    '=',
-    t.memberExpression(t.identifier('globalThis'), t.stringLiteral(returnValueKey), true),
-    expression ?? t.unaryExpression('void', t.numericLiteral(0), true),
-  )
+  return t.assignmentExpression('=', t.memberExpression(t.identifier('globalThis'), t.stringLiteral(returnValueKey), true), expression ?? t.unaryExpression('void', t.numericLiteral(0), true))
 }
 const isTopLevelReturnStatement = (path: NodePath) => {
   return path.isReturnStatement() && !path.getFunctionParent()
@@ -42,25 +39,27 @@ const createReturnValuePlugin = (returnValueKey: string, state: {hasReturnValue:
     name: 'remote-target-return-value',
     visitor: {
       Program(programPath) {
-        let hasExplicitReturnValue = false
+        const explicitReturnState = {
+          value: false,
+        }
         programPath.traverse({
           ReturnStatement(path) {
             if (!isTopLevelReturnStatement(path)) {
               return
             }
-            hasExplicitReturnValue = true
+            explicitReturnState.value = true
             state.hasReturnValue = true
             path.replaceWith(t.expressionStatement(createReturnValueExpression(returnValueKey, path.node.argument ? t.cloneNode(path.node.argument, true) : undefined)))
             path.skip()
           },
         })
-        if (hasExplicitReturnValue || hasModuleSyntax(programPath)) {
+        if (explicitReturnState.value || hasModuleSyntax(programPath)) {
           return
         }
-        const lastExpressionStatementPath = [...programPath.get('body')].reverse().find(statementPath => {
-          return !Array.isArray(statementPath) && statementPath.isExpressionStatement()
+        const lastExpressionStatementPath = [...programPath.get('body')].toReversed().find(statementPath => {
+          return statementPath.isExpressionStatement()
         })
-        if (!lastExpressionStatementPath || Array.isArray(lastExpressionStatementPath) || !lastExpressionStatementPath.isExpressionStatement()) {
+        if (!lastExpressionStatementPath) {
           return
         }
         state.hasReturnValue = true
@@ -80,12 +79,10 @@ export default globalThis[${toJavaScriptLiteral(returnValueKey)}]`,
 export const normalizeRunInput = async (input: RunInput): Promise<NormalizedRunInput> => {
   const inputCode = typeof input === 'function' ? input.toString() : input
   const returnValueKey = `__remoteTargetReturnValue_${crypto.randomUUID()}`
-  const rewrittenSource = typeof input === 'function'
-    ? normalizeFunctionInput(inputCode, returnValueKey)
-    : {
-      code: inputCode,
-      hasReturnValue: false,
-    }
+  const rewrittenSource = typeof input === 'function' ? normalizeFunctionInput(inputCode, returnValueKey) : {
+    code: inputCode,
+    hasReturnValue: false,
+  }
   const rewriteState = {
     hasReturnValue: rewrittenSource.hasReturnValue,
   }
@@ -101,21 +98,25 @@ ${rewrittenSource.code}`, {
     },
     plugins: [
       createReturnValuePlugin(returnValueKey, rewriteState),
-      [transformTypeScript, {
-        allExtensions: true,
-        allowDeclareFields: true,
-        allowNamespaces: true,
-        isTSX: true,
-        jsxPragma: jsxFactoryName,
-        jsxPragmaFrag: jsxFragmentName,
-        onlyRemoveTypeImports: false,
-        optimizeConstEnums: true,
-      }],
-      [transformReactJsx, {
-        pragma: jsxFactoryName,
-        pragmaFrag: jsxFragmentName,
-        runtime: 'classic',
-      }],
+      [
+        transformTypeScriptPluginName, {
+          allExtensions: true,
+          allowDeclareFields: true,
+          allowNamespaces: true,
+          isTSX: true,
+          jsxPragma: jsxFactoryName,
+          jsxPragmaFrag: jsxFragmentName,
+          onlyRemoveTypeImports: false,
+          optimizeConstEnums: true,
+        },
+      ],
+      [
+        transformReactJsxPluginName, {
+          pragma: jsxFactoryName,
+          pragmaFrag: jsxFragmentName,
+          runtime: 'classic',
+        },
+      ],
     ],
     sourceMaps: false,
     sourceType: 'module',
