@@ -17,20 +17,22 @@ const getTransportTag = (value: unknown) => {
   return typeof tag === 'string' ? tag : undefined
 }
 
-export const serializeTransportValue = (value: unknown, seen = new WeakSet<object>): unknown => {
+// Keep this as a function declaration. RemoteTarget stringifies it into wrapper scripts and may rebind it under a different variable name, so recursive calls and tag lookup must stay self-contained.
+export function serializeTransportValue(value: unknown, seen = new WeakSet<object>): unknown {
+  const localTransportTagKey = '__remoteTargetType'
   if (value === null || typeof value === 'boolean' || typeof value === 'string') {
     return value
   }
   if (value === undefined) {
-    return {[transportTagKey]: 'undefined'}
+    return {[localTransportTagKey]: 'undefined'}
   }
   if (typeof value === 'number') {
     if (Number.isNaN(value)) {
-      return {[transportTagKey]: 'nan'}
+      return {[localTransportTagKey]: 'nan'}
     }
     if (!Number.isFinite(value)) {
       return {
-        [transportTagKey]: 'infinity',
+        [localTransportTagKey]: 'infinity',
         sign: Math.sign(value),
       }
     }
@@ -38,36 +40,36 @@ export const serializeTransportValue = (value: unknown, seen = new WeakSet<objec
   }
   if (typeof value === 'bigint') {
     return {
-      [transportTagKey]: 'bigint',
+      [localTransportTagKey]: 'bigint',
       value: value.toString(),
     }
   }
   if (typeof value === 'function') {
     return {
-      [transportTagKey]: 'function',
+      [localTransportTagKey]: 'function',
       value: value.name || 'anonymous',
     }
   }
   if (typeof value === 'symbol') {
     return {
-      [transportTagKey]: 'symbol',
+      [localTransportTagKey]: 'symbol',
       value: String(value),
     }
   }
   if (seen.has(value)) {
-    return {[transportTagKey]: 'circular'}
+    return {[localTransportTagKey]: 'circular'}
   }
   seen.add(value)
   try {
     if (value instanceof Date) {
       return {
-        [transportTagKey]: 'date',
+        [localTransportTagKey]: 'date',
         value: Number.isNaN(value.valueOf()) ? String(value) : value.toISOString(),
       }
     }
     if (value instanceof Error) {
       return {
-        [transportTagKey]: 'error',
+        [localTransportTagKey]: 'error',
         cause: value.cause === undefined ? undefined : serializeTransportValue(value.cause, seen),
         message: value.message,
         name: value.name,
@@ -76,38 +78,38 @@ export const serializeTransportValue = (value: unknown, seen = new WeakSet<objec
     }
     if (value instanceof Map) {
       return {
-        [transportTagKey]: 'map',
+        [localTransportTagKey]: 'map',
         value: [...value.entries()].map(([key, item]) => [serializeTransportValue(key, seen), serializeTransportValue(item, seen)]),
       }
     }
     if (value instanceof RegExp) {
       return {
-        [transportTagKey]: 'regexp',
+        [localTransportTagKey]: 'regexp',
         flags: value.flags,
         source: value.source,
       }
     }
     if (value instanceof Set) {
       return {
-        [transportTagKey]: 'set',
+        [localTransportTagKey]: 'set',
         value: [...value].map(item => serializeTransportValue(item, seen)),
       }
     }
     if (value instanceof URL) {
       return {
-        [transportTagKey]: 'url',
+        [localTransportTagKey]: 'url',
         value: value.toString(),
       }
     }
     if (value instanceof ArrayBuffer) {
       return {
-        [transportTagKey]: 'arrayBuffer',
+        [localTransportTagKey]: 'arrayBuffer',
         value: Buffer.from(value).toString('base64'),
       }
     }
     if (ArrayBuffer.isView(value)) {
       return {
-        [transportTagKey]: 'typedArray',
+        [localTransportTagKey]: 'typedArray',
         name: value.constructor.name,
         value: Buffer.from(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)).toString('base64'),
       }
@@ -121,7 +123,7 @@ export const serializeTransportValue = (value: unknown, seen = new WeakSet<objec
   }
 }
 
-export const deserializeTransportValue = (value: unknown): unknown => {
+export function deserializeTransportValue(value: unknown): unknown {
   if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
     return value
   }

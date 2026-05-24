@@ -76,8 +76,7 @@ const quotePosix = (value: string) => {
 const quotePowerShell = (value: string) => {
   return `'${value.replaceAll('\'', '\'\'')}'`
 }
-const serializationPrelude = `const transportTagKey = '__remoteTargetType'
-const serializeTransportValue = ${serializeTransportValue.toString()}
+const serializationPrelude = `const serializeTransportValue = ${serializeTransportValue.toString()}
 const serializeRemoteError = error => error instanceof Error ? serializeTransportValue(error) : serializeTransportValue(new Error(String(error)))`
 const buildExecWrapper = (command: Array<string>, marker: string) => String.raw`
 import {spawn} from 'node:child_process'

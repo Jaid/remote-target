@@ -1,6 +1,7 @@
 import {expect, test} from 'bun:test'
 
 import {normalizeRunInput} from '#src/lib/remoteTarget/normalize.ts'
+import {deserializeTransportValue, serializeTransportValue} from '#src/lib/remoteTarget/serialize.ts'
 import RemoteTarget from '#src/main.ts'
 
 test('constructor supports host string and extra options', () => {
@@ -89,6 +90,21 @@ test('run local preserves maps and sets in exports and return values', async () 
     namedSet: new Set(['x', 'y']),
   })
   expect(result.returnValue).toEqual(new Set(['result']))
+})
+test('serializeTransportValue source stays self-contained when rebound under another name', () => {
+  const script = [
+    `const reboundSerializeTransportValue = ${serializeTransportValue.toString()}`,
+    'console.log(JSON.stringify(reboundSerializeTransportValue(new Map([[1, new Set([\'nested\'])]]))))',
+  ].join('\n')
+  const result = Bun.spawnSync(['bun', '--eval', script], {
+    stdin: 'ignore',
+    stderr: 'pipe',
+    stdout: 'pipe',
+  })
+  expect(result.exitCode).toBe(0)
+  expect(Buffer.from(result.stderr).toString('utf8')).toBe('')
+  const serializedValue = JSON.parse(Buffer.from(result.stdout).toString('utf8')) as unknown
+  expect(deserializeTransportValue(serializedValue)).toEqual(new Map([[1, new Set(['nested'])]]))
 })
 test('run local surfaces remote errors', async () => {
   try {
