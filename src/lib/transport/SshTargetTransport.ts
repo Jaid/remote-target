@@ -1,7 +1,7 @@
 import type {InvocationResult, TransportCommandOptions} from '../remoteTarget/types.ts'
 
-import {TargetTransport} from './base/TargetTransport.ts'
 import {runProcess} from '../remoteTarget/runProcess.ts'
+import {TargetTransport} from './base/TargetTransport.ts'
 
 type SshTargetTransportInput = {
   host: string

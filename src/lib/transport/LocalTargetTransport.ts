@@ -1,7 +1,7 @@
 import type {InvocationResult, TransportCommandOptions} from '../remoteTarget/types.ts'
 
-import {TargetTransport} from './base/TargetTransport.ts'
 import {runProcess} from '../remoteTarget/runProcess.ts'
+import {TargetTransport} from './base/TargetTransport.ts'
 
 const windowsCommand = ['pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-Command']
 const unixCommand = ['sh', '-lc']

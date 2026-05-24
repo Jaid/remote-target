@@ -1,4 +1,4 @@
-import type {InvocationResult, TransportCommandOptions} from '../types.ts'
+import type {InvocationResult, TransportCommandOptions} from '../../remoteTarget/types.ts'
 
 export abstract class TargetTransport {
   abstract readonly id: string

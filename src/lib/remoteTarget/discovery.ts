@@ -1,4 +1,4 @@
-import type {TargetTransport} from './base/TargetTransport.ts'
+import type {TargetTransport} from '../transport/base/TargetTransport.ts'
 import type {DiscoveryInfo, LinuxDistribution, OsInfo, RuntimeInfo, RuntimeName, ShellInfo, ShellName} from './types.ts'
 
 import {toJavaScriptLiteral} from './toJavaScriptLiteral.ts'
@@ -241,7 +241,7 @@ export const discoverWithoutRuntime = async (transport: TargetTransport): Promis
   const linuxProbe = await transport.runShellNeutralCommand(['uname', '-s']).catch(() => {})
   if (linuxProbe?.exitCode === 0 && linuxProbe.stdout?.trim().toLowerCase() === 'linux') {
     const envProbe = await transport.runShellNeutralCommand(['env']).catch(() => {})
-    const shellLine = envProbe?.stdout?.split(/\r?\n/u).find(line => line.startsWith('SHELL='))
+    const shellLine = envProbe?.stdout?.split(/\r?\n/u).find((line: string) => line.startsWith('SHELL='))
     const shellFile = shellLine?.slice('SHELL='.length)
     let shellName: ShellName = 'unknown'
     if (shellFile?.includes('fish')) {

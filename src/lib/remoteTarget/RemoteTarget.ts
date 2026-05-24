@@ -1,13 +1,13 @@
-import type {TargetTransport} from './base/TargetTransport.ts'
+import type {TargetTransport} from '../transport/base/TargetTransport.ts'
 import type {DiscoveryInfo, ExecResult, RemoteTargetConstructorOptions, RemoteTargetInput, RemoteTargetOptions, RunInput, RunResult, RuntimeInfo, RuntimeName} from './types.ts'
 
 import optis from 'optis'
 
-import {discoverTarget, discoverWithoutRuntime, getRuntimeCommand, probeBootstrapRuntime} from './discovery.ts'
 import {LocalTargetTransport} from '../transport/LocalTargetTransport.ts'
+import {SshTargetTransport} from '../transport/SshTargetTransport.ts'
+import {discoverTarget, discoverWithoutRuntime, getRuntimeCommand, probeBootstrapRuntime} from './discovery.ts'
 import {normalizeRunInput} from './normalize.ts'
 import {deserializeTransportValue, serializeRemoteError, serializeTransportValue} from './serialize.ts'
-import {SshTargetTransport} from '../transport/SshTargetTransport.ts'
 import {toJavaScriptLiteral} from './toJavaScriptLiteral.ts'
 
 const supportedRuntimeNames = ['bun', 'node', 'deno'] as const satisfies Array<RuntimeName>
@@ -78,6 +78,24 @@ const quotePowerShell = (value: string) => {
 }
 const serializationPrelude = `const serializeTransportValue = ${serializeTransportValue.toString()}
 const serializeRemoteError = error => error instanceof Error ? serializeTransportValue(error) : serializeTransportValue(new Error(String(error)))`
+const buildModuleUrlSetup = (normalizedCode: string, runtimeName: RuntimeName) => {
+  const encodedModule = Buffer.from(normalizedCode, 'utf8').toString('base64')
+  // Node does not support blob: ESM imports, while Bun chokes on sufficiently large data: URLs.
+  const useBlobModuleUrl = runtimeName !== 'node'
+  return String.raw`
+${useBlobModuleUrl ? `import {Buffer} from 'node:buffer'
+` : ''}const encodedModule = ${toJavaScriptLiteral(encodedModule)}
+const useBlobModuleUrl = ${toJavaScriptLiteral(useBlobModuleUrl)}
+const moduleUrl = useBlobModuleUrl
+  ? URL.createObjectURL(new Blob([Buffer.from(encodedModule, 'base64')], {type: 'text/javascript;charset=utf-8'}))
+  : 'data:text/javascript;base64,' + encodedModule
+const revokeModuleUrl = () => {
+  if (useBlobModuleUrl) {
+    URL.revokeObjectURL(moduleUrl)
+  }
+}
+`
+}
 const buildExecWrapper = (command: Array<string>, marker: string) => String.raw`
 import {spawn} from 'node:child_process'
 
@@ -130,14 +148,13 @@ try {
   })
 }
 `
-const buildRunWrapper = (normalizedCode: string, globals: Record<string, unknown>, marker: string, returnValueKey: string) => {
-  const encodedModule = Buffer.from(normalizedCode, 'utf8').toString('base64')
+const buildRunWrapper = (normalizedCode: string, globals: Record<string, unknown>, marker: string, returnValueKey: string, runtimeName: RuntimeName) => {
   return String.raw`
+${buildModuleUrlSetup(normalizedCode, runtimeName)}
 ${serializationPrelude}
 
 const marker = ${toJavaScriptLiteral(marker)}
 const returnValueKey = ${toJavaScriptLiteral(returnValueKey)}
-const moduleUrl = ${toJavaScriptLiteral(`data:text/javascript;base64,${encodedModule}`)}
 
 const emit = payload => console.log(marker + JSON.stringify(payload))
 
@@ -157,6 +174,8 @@ try {
     ok: false,
   })
   throw error
+} finally {
+  revokeModuleUrl()
 }
 `
 }
@@ -302,7 +321,7 @@ export class RemoteTarget {
     const normalizedInput = await normalizeRunInput(input)
     const marker = `__remoteTargetRun_${crypto.randomUUID()}__`
     const invocation = await this.transport.runShellNeutralCommand(getRuntimeCommand(runtime.name), {
-      stdin: buildRunWrapper(normalizedInput.normalizedCode, this.options.globals, marker, normalizedInput.returnValueKey),
+      stdin: buildRunWrapper(normalizedInput.normalizedCode, this.options.globals, marker, normalizedInput.returnValueKey, runtime.name),
     })
     const parsed = parseMarkedJsonPayload<RunPayload>(invocation.stdout, marker)
     if (!parsed.payload) {

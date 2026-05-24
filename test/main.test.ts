@@ -4,6 +4,25 @@ import {normalizeRunInput} from '#src/lib/remoteTarget/normalize.ts'
 import {deserializeTransportValue, serializeTransportValue} from '#src/lib/remoteTarget/serialize.ts'
 import RemoteTarget from '#src/main.ts'
 
+const createScriptWithExactByteLength = (targetByteLength: number) => {
+  const prefix = 'const padding = '
+  const suffix = '\nconst length = padding.length\nexport default length\nreturn length\n'
+  const stringLiteralQuotesByteLength = 2
+  const paddingLength = targetByteLength - Buffer.byteLength(prefix) - Buffer.byteLength(suffix) - stringLiteralQuotesByteLength
+  if (paddingLength <= 0) {
+    throw new Error(`Expected a target byte length above ${Buffer.byteLength(prefix) + Buffer.byteLength(suffix) + stringLiteralQuotesByteLength}.`)
+  }
+  const inputCode = `${prefix}${JSON.stringify('x'.repeat(paddingLength))}${suffix}`
+  const inputBytes = Buffer.byteLength(inputCode)
+  if (inputBytes !== targetByteLength) {
+    throw new Error(`Expected a script with ${targetByteLength} bytes, got ${inputBytes}.`)
+  }
+  return {
+    expectedLength: paddingLength,
+    inputBytes,
+    inputCode,
+  }
+}
 test('constructor supports host string and extra options', () => {
   const remoteTarget = new RemoteTarget('vps', {
     globals: {
@@ -75,6 +94,21 @@ test('run local string with exports and top-level return', async () => {
     platform: process.platform,
   })
   expect(result.returnValue).toBe(process.platform)
+})
+test('run local very long script with bun runtime', async () => {
+  const {expectedLength, inputBytes, inputCode} = createScriptWithExactByteLength(1_050_000)
+  expect(inputBytes).toBeGreaterThanOrEqual(1_000_000)
+  expect(inputBytes).toBeLessThanOrEqual(1_200_000)
+  const result = await RemoteTarget.run('local', inputCode, {
+    runtimeCandidates: ['bun'],
+  })
+  expect(result.exitCode).toBe(0)
+  expect(result.runtime.name).toBe('bun')
+  expect(Buffer.byteLength(result.inputCode)).toBe(inputBytes)
+  expect(result.exports).toEqual({
+    default: expectedLength,
+  })
+  expect(result.returnValue).toBe(expectedLength)
 })
 test('run local preserves maps and sets in exports and return values', async () => {
   const result = await RemoteTarget.run('local', `

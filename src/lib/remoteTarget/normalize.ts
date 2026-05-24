@@ -12,6 +12,7 @@ const transformReactJsxPluginName = '@babel/plugin-transform-react-jsx'
 const transformTypeScriptPluginName = '@babel/plugin-transform-typescript'
 const jsxFactoryName = '__remoteTargetJsx'
 const jsxFragmentName = '__remoteTargetFragment'
+const largeSourceCompactThreshold = 500_000
 const jsxPrelude = `const ${jsxFragmentName} = Symbol.for('remote-target.fragment')
 const ${jsxFactoryName} = (type, props, ...children) => {
   const normalizedChildren = children.length === 0 ? undefined : children.length === 1 ? children[0] : children
@@ -83,12 +84,14 @@ export const normalizeRunInput = async (input: RunInput): Promise<NormalizedRunI
     code: inputCode,
     hasReturnValue: false,
   }
+  const shouldCompactLargeSource = Buffer.byteLength(rewrittenSource.code, 'utf8') > largeSourceCompactThreshold
   const rewriteState = {
     hasReturnValue: rewrittenSource.hasReturnValue,
   }
   const transformed = await transformAsync(`${jsxPrelude}
 ${rewrittenSource.code}`, {
     babelrc: false,
+    compact: shouldCompactLargeSource ? true : undefined,
     configFile: false,
     filename: 'remote-target-input.tsx',
     parserOpts: {
