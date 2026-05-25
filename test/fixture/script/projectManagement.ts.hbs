@@ -1,0 +1,14 @@
+import {execSync} from 'child_process'
+import * as fs from 'fs/promises'
+
+const folder = `/tmp/${crypto.randomUUID()}`
+const mkdirResult = execSync(`mkdir -p ${folder}`)
+const addResult = execSync(`{{#if eq runtime 'node'}}npm install --save-dev{{else if eq runtime 'deno'}}deno add{{else}}bun add --dev{{/if}} @swc/core`, {
+  cwd: folder
+})
+const swc = await import(`${folder}/node_modules/@swc/core/index.js`)
+return [
+  mkdirResult,
+  addResult,
+  Object.keys(swc)
+]
