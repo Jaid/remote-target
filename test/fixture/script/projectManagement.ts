@@ -7,20 +7,20 @@ const runtimeContexts = {
     }
     return {exec}
   },
+  async deno() {
+    const childProcess = await import('node:child_process')
+    const exec = async (cwd: string, command: Array<string>) => {
+      const output = await childProcess.exec(command.join(' '), {cwd})
+      return output.stdout
+    }
+    return {exec}
+  },
   async bun() {
     const exec = async (cwd: string, command: Array<string>) => {
       const execution = Bun.spawn(command, {cwd})
       await execution.exited
       const output = await execution.stdout.text()
       return output
-    }
-    return {exec}
-  },
-  async deno() {
-    const childProcess = await import('node:child_process')
-    const exec = async (cwd: string, command: Array<string>) => {
-      const output = await childProcess.exec(command.join(' '), {cwd})
-      return output.stdout
     }
     return {exec}
   }
@@ -31,12 +31,12 @@ const packageManagers = {
     const getInstallCommand = (name: string) => ['npm', 'install', '--save-dev', name]
     return {getInstallCommand}
   },
-  bun() {
-    const getInstallCommand = (name: string) => ['bun', 'add', '--dev', name]
-    return {getInstallCommand}
-  },
   deno() {
     const getInstallCommand = (name: string) => ['deno', 'add', '--dev', `npm:${name}`]
+    return {getInstallCommand}
+  },
+  bun() {
+    const getInstallCommand = (name: string) => ['bun', 'add', '--dev', name]
     return {getInstallCommand}
   }
 }
