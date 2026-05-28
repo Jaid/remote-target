@@ -5,6 +5,7 @@ import {afterAll, beforeAll, describe, expect, test} from 'bun:test'
 import {mkdir, mkdtemp, readFile, rm} from 'node:fs/promises'
 import path from 'node:path'
 
+import makeSshKeys from 'make-ssh-keys'
 import {renderHandlebars} from 'zeug'
 
 import {runProcess} from '#src/lib/remoteTarget/runProcess.ts'
@@ -35,9 +36,9 @@ type ScriptCase = {
 }
 
 type BaseContext = {
+  authorizedKey: string
   folder: string
   privateKeyFile: string
-  publicKey: string
 }
 
 type RuntimeContext = {
@@ -146,9 +147,47 @@ const buildTimeoutMs = 1_800_000
 const cleanupTimeoutMs = 120_000
 const commandTimeoutMs = 120_000
 const matrixRootFolder = path.join(import.meta.dir, '../private/agent/matrix')
-const sshKeygenCommand = process.platform === 'win32' ? 'ssh-keygen.exe' : 'ssh-keygen'
-const sshKeygenProbeCommand = process.platform === 'win32' ? ['where.exe', sshKeygenCommand] : ['which', sshKeygenCommand]
 const normalizePath = (value: string) => value.replaceAll('\\', '/')
+const ensureTrailingNewline = (value: string) => {
+  return value.endsWith('\n') ? value : `${value}\n`
+}
+const encodeSshString = (value: Buffer | string) => {
+  const content = typeof value === 'string' ? Buffer.from(value, 'utf8') : Buffer.from(value)
+  const output = Buffer.allocUnsafe(4 + content.length)
+  output.writeUInt32BE(content.length, 0)
+  content.copy(output, 4)
+  return output
+}
+const isOpenSshEd25519PublicKeyBody = (value: Buffer) => {
+  if (value.length < 4) {
+    return false
+  }
+  const keyTypeLength = value.readUInt32BE(0)
+  const keyTypeStart = 4
+  const keyTypeEnd = keyTypeStart + keyTypeLength
+  if (keyTypeEnd + 4 > value.length) {
+    return false
+  }
+  const keyType = value.subarray(keyTypeStart, keyTypeEnd).toString('utf8')
+  const keyLength = value.readUInt32BE(keyTypeEnd)
+  return keyType === 'ssh-ed25519' && keyLength === 32 && keyTypeEnd + 4 + keyLength === value.length
+}
+// make-ssh-keys currently prefixes SPKI bytes with ssh-ed25519, while authorized_keys expects OpenSSH's wire format.
+const toOpenSshPublicKey = async (value: string, comment?: string) => {
+  const [prefix = '', body = '', ...rest] = value.trim().split(/\s+/u)
+  if (prefix !== 'ssh-ed25519' || body.length === 0) {
+    throw new Error(`Expected an ssh-ed25519 public key, got ${JSON.stringify(value)}.`)
+  }
+  const decodedBody = Buffer.from(body, 'base64')
+  let normalizedBody = body
+  if (!isOpenSshEd25519PublicKeyBody(decodedBody)) {
+    const importedPublicKey = await crypto.subtle.importKey('spki', decodedBody, 'Ed25519', true, ['verify'])
+    const rawPublicKey = Buffer.from(await crypto.subtle.exportKey('raw', importedPublicKey))
+    normalizedBody = Buffer.concat([encodeSshString('ssh-ed25519'), encodeSshString(rawPublicKey)]).toString('base64')
+  }
+  const normalizedComment = comment ?? (rest.join(' ') || undefined)
+  return ['ssh-ed25519', normalizedBody, normalizedComment].filter(Boolean).join(' ')
+}
 const quoteShell = (value: string) => {
   return JSON.stringify(value)
 }
@@ -183,21 +222,23 @@ const isCommandAvailable = async (command: Array<string>) => {
   }
 }
 const matrixPrerequisitesAvailable = await (async () => {
-  const [dockerAvailable, sshKeygenAvailable] = await Promise.all([
+  const [dockerAvailable, sshAvailable] = await Promise.all([
     isCommandAvailable(['docker', 'info']),
-    isCommandAvailable(sshKeygenProbeCommand),
+    isCommandAvailable(['ssh', '-V']),
   ])
-  return dockerAvailable && sshKeygenAvailable
+  return dockerAvailable && sshAvailable
 })()
 const matrixDescribe = matrixPrerequisitesAvailable ? describe : describe.skip
 const getBaseSetupStep = (baseCase: BaseCase) => {
   if (baseCase.kind === 'apt') {
-    return String.raw`RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates libatomic1 libstdc++6 openssh-server procps \
+    return String.raw`ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates dropbear libatomic1 libstdc++6 procps \
  && rm -rf /var/lib/apt/lists/*`
   }
   if (baseCase.kind === 'arch') {
-    return String.raw`RUN pacman -Syyu --noconfirm --needed ca-certificates gcc-libs openssh procps-ng which`
+    return String.raw`ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+RUN pacman -Syyu --noconfirm --needed ca-certificates dropbear gcc-libs procps-ng which`
   }
   return String.raw`ENV PATH=/usr/local/bin:/root/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/default/sbin:/usr/bin:/bin
 RUN nix-env -iA nixpkgs.dropbear nixpkgs.gcc.cc.lib nixpkgs.glibc nixpkgs.nix-ld nixpkgs.procps`
@@ -221,12 +262,12 @@ const getRuntimeSetupStep = (baseCase: BaseCase, runtimeCase: RuntimeCase) => {
   }
   return String.raw`RUN set -eux; \
   chmod +x ${runtimeBinaryPath}; \
-  mkdir -p /usr/local/bin; \
+  mkdir -p /usr/bin; \
   { \
     echo '#!/bin/sh'; \
     echo 'exec ${runtimeBinaryPath} "$@"'; \
-  } > /usr/local/bin/${runtimeCase.id}; \
-  chmod +x /usr/local/bin/${runtimeCase.id}`
+  } > /usr/bin/${runtimeCase.id}; \
+  chmod +x /usr/bin/${runtimeCase.id}`
 }
 const getSshServerSetupStep = (baseCase: BaseCase) => {
   if (baseCase.kind === 'nix') {
@@ -236,44 +277,29 @@ const getSshServerSetupStep = (baseCase: BaseCase) => {
   printf '%s\n' "$ROOT_SHELL" /bin/sh > /etc/shells`
   }
   return String.raw`RUN set -eux; \
-  mkdir -p /etc/ssh /run/sshd; \
-  ssh-keygen -A; \
-  { \
-    echo 'Port 22'; \
-    echo 'AddressFamily any'; \
-    echo 'ListenAddress 0.0.0.0'; \
-    echo 'ListenAddress ::'; \
-    echo 'PermitRootLogin yes'; \
-    echo 'PasswordAuthentication no'; \
-    echo 'KbdInteractiveAuthentication no'; \
-    echo 'ChallengeResponseAuthentication no'; \
-    echo 'UsePAM no'; \
-    echo 'PubkeyAuthentication yes'; \
-    echo 'AuthorizedKeysFile .ssh/authorized_keys'; \
-    echo 'PidFile /run/sshd.pid'; \
-    echo 'PrintMotd no'; \
-    echo 'Subsystem sftp internal-sftp'; \
-  } > /etc/ssh/sshd_config`
+  mkdir -p /etc/dropbear /run/dropbear`
 }
-const getSshServerCommand = (baseCase: BaseCase) => {
-  if (baseCase.kind === 'nix') {
-    return 'exec "$(command -v dropbear)" -F -E -R -s -g -p 22'
-  }
-  return 'exec "$(command -v sshd)" -D -e -f /etc/ssh/sshd_config'
+const getSshServerCommand = () => {
+  return 'exec "$(command -v dropbear)" -F -E -R -s -g -p 22'
 }
 const createBaseContext = async (baseCase: BaseCase): Promise<BaseContext> => {
   await mkdir(matrixRootFolder, {recursive: true})
   const folder = await mkdtemp(path.join(matrixRootFolder, `${toDockerSlug(baseCase.id)}-`))
   const privateKeyFile = path.join(folder, 'id_ed25519')
-  await ensureCommandSucceeded([sshKeygenCommand, '-q', '-t', 'ed25519', '-N', '', '-C', `remote-target-test-${toDockerSlug(baseCase.id)}`, '-f', privateKeyFile], `Generating a temporary SSH key for ${baseCase.id}`)
-  const publicKey = await readFile(`${privateKeyFile}.pub`, 'utf8')
+  const keyComment = `remote-target-test-${toDockerSlug(baseCase.id)}`
+  const {privateKey, publicKey} = await makeSshKeys()
+  const authorizedKey = await toOpenSshPublicKey(publicKey, keyComment)
+  await Promise.all([
+    Bun.write(privateKeyFile, ensureTrailingNewline(privateKey)),
+    Bun.write(`${privateKeyFile}.pub`, ensureTrailingNewline(authorizedKey)),
+  ])
   return {
+    authorizedKey,
     folder,
     privateKeyFile,
-    publicKey,
   }
 }
-const renderDockerfile = (baseCase: BaseCase, runtimeCase: RuntimeCase, publicKey: string) => {
+const renderDockerfile = (baseCase: BaseCase, runtimeCase: RuntimeCase, authorizedKey: string) => {
   return renderHandlebars(dockerfileTemplate, {
     baseSetupStep: getBaseSetupStep(baseCase),
     fullBaseImage: `${baseCase.baseImage}:${baseCase.baseImageVersion}`,
@@ -281,9 +307,9 @@ const renderDockerfile = (baseCase: BaseCase, runtimeCase: RuntimeCase, publicKe
     runtimeBinarySourcePath: runtimeCase.binarySourcePath,
     runtimeBuilderImage: runtimeCase.builderImage,
     runtimeSetupStep: getRuntimeSetupStep(baseCase, runtimeCase),
-    sshServerCommand: getSshServerCommand(baseCase),
+    sshServerCommand: getSshServerCommand(),
     sshServerSetupStep: getSshServerSetupStep(baseCase),
-    sshPublicKeyBase64: Buffer.from(publicKey, 'utf8').toString('base64'),
+    sshAuthorizedKeyBase64: Buffer.from(authorizedKey, 'utf8').toString('base64'),
   })
 }
 const inspectPublishedSshPort = async (containerName: string) => {
@@ -355,7 +381,7 @@ const createRuntimeContext = async (baseCase: BaseCase, runtimeCase: RuntimeCase
   const containerName = `${toDockerSlug(`${baseCase.baseImage}-${baseCase.baseImageVersion}-${runtimeCase.id}`)}-${crypto.randomUUID().slice(0, 8)}`
   const dockerfileFile = path.join(runtimeWorkFolder, 'Dockerfile')
   const knownHostsFile = path.join(runtimeWorkFolder, 'known_hosts')
-  const dockerfileContent = renderDockerfile(baseCase, runtimeCase, baseContext.publicKey)
+  const dockerfileContent = renderDockerfile(baseCase, runtimeCase, baseContext.authorizedKey)
   const runtimeContextDraft = {
     baseContext,
     containerId: '',

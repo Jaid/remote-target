@@ -37,6 +37,7 @@
     "eslint": "^10.4.0",
     "eslint-config-jaid": "^26.0.0",
     "guess-runtime": "^0.1.0",
+    "make-ssh-keys": "^0.1.0",
     "tsconfig-jaid-bun": "^15.2.0",
     "typescript": "^6.0.3",
     "zeug": "^2.1.0"
