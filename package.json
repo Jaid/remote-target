@@ -39,7 +39,7 @@
     "guess-runtime": "^0.1.0",
     "make-ssh-keys": "^0.1.0",
     "tsconfig-jaid-bun": "^15.2.0",
-    "typescript": "^7.0.2",
+    "typescript": "npm:@typescript/typescript6",
     "zeug": "^2.1.0"
   }
 }
