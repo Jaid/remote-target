@@ -2,6 +2,7 @@ import type {TargetTransport} from '../transport/base/TargetTransport.ts'
 import type {DiscoveryInfo, ExecResult, InvocationOptions, RemoteTargetConstructorOptions, RemoteTargetInput, RemoteTargetOptions, RunInput, RunInvocationOptions, RunResult, RuntimeInfo, RuntimeName} from './types.ts'
 
 import optis from 'optis'
+import tinyhand from 'tinyhand'
 
 import {LocalTargetTransport} from '../transport/LocalTargetTransport.ts'
 import {SshTargetTransport} from '../transport/SshTargetTransport.ts'
@@ -262,11 +263,8 @@ export class RemoteTarget {
   #runtime?: RuntimeInfo
 
   constructor(input: RemoteTargetInput, extraOptions: RemoteTargetConstructorOptions = {}) {
-    const mergedOptions = typeof input === 'string' ? {
-      host: input,
-      ...extraOptions,
-    } : {
-      ...input,
+    const mergedOptions = {
+      ...tinyhand('host', input),
       ...extraOptions,
     }
     this.options = optionsSchema.process(mergedOptions)

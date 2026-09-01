@@ -1,3 +1,5 @@
+import type tinyhand from 'tinyhand'
+
 export type RuntimeName = 'bun' | 'deno' | 'node'
 
 export type ShellName = 'bash' | 'fish' | 'powershell' | 'sh' | 'unknown' | 'zsh'
@@ -72,7 +74,7 @@ export type RemoteTargetConstructorOptions = Omit<Partial<RemoteTargetOptions>, 
 
 export type RemoteTargetInputOptions = {host: string} & Partial<RemoteTargetOptions>
 
-export type RemoteTargetInput = RemoteTargetInputOptions | string
+export type RemoteTargetInput = tinyhand.Wrap<'host', RemoteTargetInputOptions>
 
 export type RunInput = (() => unknown) | string
 
