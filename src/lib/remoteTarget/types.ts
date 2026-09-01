@@ -1,6 +1,6 @@
 export type RuntimeName = 'bun' | 'deno' | 'node'
 
-export type ShellName = 'bash' | 'fish' | 'powershell' | 'unknown' | 'zsh'
+export type ShellName = 'bash' | 'fish' | 'powershell' | 'sh' | 'unknown' | 'zsh'
 
 export type LinuxDistribution = 'arch' | 'debian' | 'nixos' | 'unknown'
 
@@ -30,7 +30,6 @@ export type InvocationResult = {
   stderr?: string
   stdout?: string
   system: {
-    maxRss?: number
     pid: number
   }
 }
@@ -78,6 +77,7 @@ export type RemoteTargetInput = RemoteTargetInputOptions | string
 export type RunInput = (() => unknown) | string
 
 export type NormalizedRunInput = {
+  exportsKey: string
   hasReturnValue: boolean
   inputCode: string
   normalizedCode: string
@@ -85,5 +85,12 @@ export type NormalizedRunInput = {
 }
 
 export type TransportCommandOptions = {
+  maxOutputBytes?: number
+  signal?: AbortSignal
   stdin?: string
+  timeoutMs?: number
 }
+
+export type InvocationOptions = TransportCommandOptions
+
+export type RunInvocationOptions = Omit<InvocationOptions, 'stdin'>

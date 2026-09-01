@@ -15,7 +15,7 @@ const isRuntimeName = (value: string): value is RuntimeName => {
   return value === 'bun' || value === 'deno' || value === 'node'
 }
 const isShellName = (value: string): value is ShellName => {
-  return value === 'bash' || value === 'fish' || value === 'powershell' || value === 'unknown' || value === 'zsh'
+  return value === 'bash' || value === 'fish' || value === 'powershell' || value === 'sh' || value === 'unknown' || value === 'zsh'
 }
 const getFirstLine = (value: string | undefined) => {
   return value?.split(/\r?\n/u).find(line => line.trim().length > 0)?.trim()
@@ -137,8 +137,11 @@ const getShellName = value => {
   if (basename.includes('zsh')) {
     return 'zsh'
   }
-  if (basename.includes('bash') || basename.includes('sh')) {
+  if (basename.includes('bash')) {
     return 'bash'
+  }
+  if (basename.endsWith('sh')) {
+    return 'sh'
   }
   return 'unknown'
 }
@@ -169,13 +172,9 @@ const findExecutable = name => {
       return normalizePath(firstLine)
     }
   }
-  const versionResult = run(name, ['--version'])
-  if (versionResult.exitCode === 0) {
-    return name
-  }
 }
-const getRuntimeVersion = name => {
-  const result = run(name, ['--version'])
+const getRuntimeVersion = (name, file) => {
+  const result = run(file, ['--version'])
   if (result.exitCode !== 0) {
     return undefined
   }
@@ -183,7 +182,13 @@ const getRuntimeVersion = name => {
   if (!firstLine) {
     return undefined
   }
-  return name === 'deno' && firstLine.startsWith('deno ') ? firstLine.slice('deno '.length) : firstLine
+  if (name === 'deno') {
+    return firstLine.startsWith('deno ') ? firstLine.slice('deno '.length) : undefined
+  }
+  if (name === 'node') {
+    return /^v\d/u.test(firstLine) ? firstLine : undefined
+  }
+  return /^\d/u.test(firstLine) ? firstLine : undefined
 }
 const shellFile = process.platform === 'win32'
   ? findExecutable('pwsh.exe') || findExecutable('powershell.exe') || process.env.ComSpec || ''
@@ -202,23 +207,29 @@ const runtimes = runtimeCandidates.flatMap(name => {
   if (!file) {
     return []
   }
-  return [{file, name, version: getRuntimeVersion(name)}]
+  const version = getRuntimeVersion(name, file)
+  if (!version) {
+    return []
+  }
+  return [{file, name, version}]
 })
 console.log(JSON.stringify({os: osInfo, runtimes, shell}))
 `
 
-export const getRuntimeCommand = (runtimeName: RuntimeName) => {
+export const getRuntimeCommand = (runtime: RuntimeInfo | RuntimeName) => {
+  const runtimeName = typeof runtime === 'string' ? runtime : runtime.name
+  const file = typeof runtime === 'string' ? runtime : runtime.file
   if (runtimeName === 'bun') {
-    return ['bun', '-']
+    return [file, '-']
   }
   if (runtimeName === 'deno') {
-    return ['deno', 'run', '-A', '-']
+    return [file, 'run', '-A', '-']
   }
-  return ['node', '--input-type=module', '-']
+  return [file, '--input-type=module', '-']
 }
 
 export const discoverTarget = async (transport: TargetTransport, bootstrapRuntime: RuntimeInfo): Promise<DiscoveryInfo> => {
-  const result = await transport.runShellNeutralCommand(getRuntimeCommand(bootstrapRuntime.name), {
+  const result = await transport.runShellNeutralCommand(getRuntimeCommand(bootstrapRuntime), {
     stdin: discoveryScript(['bun', 'node', 'deno']),
   })
   if (result.exitCode !== 0 || !result.stdout) {
@@ -250,6 +261,8 @@ export const discoverWithoutRuntime = async (transport: TargetTransport): Promis
       shellName = 'zsh'
     } else if (shellFile?.includes('bash')) {
       shellName = 'bash'
+    } else if (shellFile?.split('/').at(-1)?.endsWith('sh')) {
+      shellName = 'sh'
     }
     return {
       os: {
@@ -263,14 +276,25 @@ export const discoverWithoutRuntime = async (transport: TargetTransport): Promis
       },
     }
   }
-  const powershellProbe = await transport.runShellNeutralCommand(['powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()']).catch(() => {})
-  if (powershellProbe?.exitCode === 0) {
+  const powershellProbes = ['pwsh.exe', 'powershell.exe']
+  const powershellProbe = await Promise.any(powershellProbes.map(async file => {
+    const result = await transport.runShellNeutralCommand([file, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()'])
+    if (result.exitCode !== 0) {
+      throw new Error('PowerShell probe failed.')
+    }
+    return {
+      file,
+      result,
+    }
+  })).catch(() => {})
+  if (powershellProbe) {
     return {
       os: {
         name: 'windows',
       },
       runtimes: [],
       shell: {
+        file: powershellProbe.file,
         name: 'powershell',
       },
     }
@@ -284,14 +308,14 @@ export const probeBootstrapRuntime = async (transport: TargetTransport, runtimeN
     if (versionProbe?.exitCode !== 0) {
       continue
     }
-    const runtimeInfo = {
+    const provisionalRuntimeInfo = {
       file: runtimeName,
       name: runtimeName,
       ...normalizeRuntimeVersion(runtimeName, versionProbe.stdout) ? {version: normalizeRuntimeVersion(runtimeName, versionProbe.stdout)} : {},
     } satisfies RuntimeInfo
     try {
-      await discoverTarget(transport, runtimeInfo)
-      return runtimeInfo
+      const discovery = await discoverTarget(transport, provisionalRuntimeInfo)
+      return discovery.runtimes.find(runtime => runtime.name === runtimeName) ?? provisionalRuntimeInfo
     } catch {}
   }
 }

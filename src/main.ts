@@ -1,2 +1,5 @@
-export {RemoteTarget as default, RemoteTarget} from './lib/remoteTarget/index.ts'
-export type {DiscoveryInfo, ExecResult, InvocationResult, LinuxDistribution, OsInfo, RemoteTargetConstructorOptions, RemoteTargetInput, RemoteTargetOptions, RunInput, RunResult, RuntimeInfo, RuntimeName, ShellInfo, ShellName} from './lib/remoteTarget/index.ts'
+import {RemoteTarget} from './lib/remoteTarget/index.ts'
+
+export {RemoteTarget}
+export default RemoteTarget
+export type {DiscoveryInfo, ExecResult, InvocationOptions, InvocationResult, LinuxDistribution, OsInfo, RemoteTargetConstructorOptions, RemoteTargetInput, RemoteTargetOptions, RunInput, RunInvocationOptions, RunResult, RuntimeInfo, RuntimeName, ShellInfo, ShellName} from './lib/remoteTarget/index.ts'

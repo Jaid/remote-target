@@ -98,7 +98,7 @@ const baseCases = [
     baseImage: 'nixos/nix',
     baseImageVersion: '2.34.7',
     expectedDistribution: 'unknown',
-    id: 'nixos/nix 2.34.7',
+    id: 'nix 2.34.7 container',
     kind: 'nix',
   },
 ] as const satisfies Array<BaseCase>
@@ -113,13 +113,13 @@ const runtimeCases = [
     binarySourcePath: '/usr/bin/deno',
     builderImage: 'denoland/deno:2.8.0',
     id: 'deno',
-    version: '2.8.0',
+    version: '2.8.1',
   },
   {
     binarySourcePath: '/usr/local/bin/node',
     builderImage: 'node:26.2.0-bookworm-slim',
     id: 'node',
-    version: '26.2.0',
+    version: '26.3.1',
   },
 ] as const satisfies Array<RuntimeCase>
 const scriptCases = [
@@ -229,6 +229,9 @@ const matrixPrerequisitesAvailable = await (async () => {
   return dockerAvailable && sshAvailable
 })()
 const matrixDescribe = matrixPrerequisitesAvailable ? describe : describe.skip
+if (!matrixPrerequisitesAvailable && Bun.env.REMOTE_TARGET_SKIP_INTEGRATION !== '1') {
+  throw new Error('Docker and SSH are required for integration tests.')
+}
 const getBaseSetupStep = (baseCase: BaseCase) => {
   if (baseCase.kind === 'apt') {
     return String.raw`ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

@@ -7,15 +7,11 @@ const windowsCommand = ['pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-Co
 const unixCommand = ['sh', '-lc']
 
 export class LocalTargetTransport extends TargetTransport {
-  id = 'local'
-
-  override runShellCommand(command: string): Promise<InvocationResult> {
-    return runProcess(process.platform === 'win32' ? [...windowsCommand, command] : [...unixCommand, command])
+  override runShellCommand(command: string, options: TransportCommandOptions = {}): Promise<InvocationResult> {
+    return runProcess(process.platform === 'win32' ? [...windowsCommand, command] : [...unixCommand, command], options)
   }
 
   override runShellNeutralCommand(command: Array<string>, options: TransportCommandOptions = {}): Promise<InvocationResult> {
-    return runProcess(command, {
-      stdin: options.stdin,
-    })
+    return runProcess(command, options)
   }
 }

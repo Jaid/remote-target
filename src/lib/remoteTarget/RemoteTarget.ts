@@ -1,5 +1,5 @@
 import type {TargetTransport} from '../transport/base/TargetTransport.ts'
-import type {DiscoveryInfo, ExecResult, RemoteTargetConstructorOptions, RemoteTargetInput, RemoteTargetOptions, RunInput, RunResult, RuntimeInfo, RuntimeName} from './types.ts'
+import type {DiscoveryInfo, ExecResult, InvocationOptions, RemoteTargetConstructorOptions, RemoteTargetInput, RemoteTargetOptions, RunInput, RunInvocationOptions, RunResult, RuntimeInfo, RuntimeName} from './types.ts'
 
 import optis from 'optis'
 
@@ -7,7 +7,7 @@ import {LocalTargetTransport} from '../transport/LocalTargetTransport.ts'
 import {SshTargetTransport} from '../transport/SshTargetTransport.ts'
 import {discoverTarget, discoverWithoutRuntime, getRuntimeCommand, probeBootstrapRuntime} from './discovery.ts'
 import {normalizeRunInput} from './normalize.ts'
-import {deserializeTransportValue, serializeRemoteError, serializeTransportValue} from './serialize.ts'
+import {deserializeTransportValue, serializeTransportValue} from './serialize.ts'
 import {toJavaScriptLiteral} from './toJavaScriptLiteral.ts'
 
 const supportedRuntimeNames = ['bun', 'node', 'deno'] as const satisfies Array<RuntimeName>
@@ -96,13 +96,19 @@ const revokeModuleUrl = () => {
 }
 `
 }
-const buildExecWrapper = (command: Array<string>, marker: string) => String.raw`
+const buildExecWrapper = (command: Array<string>, marker: string, options: InvocationOptions) => String.raw`
 import {spawn} from 'node:child_process'
+import {Buffer} from 'node:buffer'
 
 ${serializationPrelude}
 
 const command = ${toJavaScriptLiteral(command)}
 const marker = ${toJavaScriptLiteral(marker)}
+const options = ${toJavaScriptLiteral({
+  maxOutputBytes: options.maxOutputBytes,
+  stdin: options.stdin,
+  timeoutMs: options.timeoutMs,
+})}
 const startedAt = Date.now()
 
 const emit = payload => console.log(marker + JSON.stringify(payload))
@@ -110,25 +116,48 @@ const emit = payload => console.log(marker + JSON.stringify(payload))
 try {
   const [file, ...args] = command
   const child = spawn(file, args, {
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   })
-  let stdout = ''
-  let stderr = ''
+  const stdoutChunks = []
+  const stderrChunks = []
+  let outputBytes = 0
+  let forcedExitCode
+  const capture = (target, chunk) => {
+    const remainingBytes = options.maxOutputBytes === undefined ? chunk.byteLength : Math.max(0, options.maxOutputBytes - outputBytes)
+    if (remainingBytes > 0) {
+      target.push(chunk.subarray(0, remainingBytes))
+      outputBytes += Math.min(chunk.byteLength, remainingBytes)
+    }
+    if (options.maxOutputBytes !== undefined && chunk.byteLength > remainingBytes && forcedExitCode === undefined) {
+      forcedExitCode = 1
+      stderrChunks.push(Buffer.from('\nOutput exceeded the ' + options.maxOutputBytes + '-byte limit.'))
+      child.kill()
+    }
+  }
   child.stdout.on('data', chunk => {
-    stdout += String(chunk)
+    capture(stdoutChunks, chunk)
   })
   child.stderr.on('data', chunk => {
-    stderr += String(chunk)
+    capture(stderrChunks, chunk)
   })
+  child.stdin.end(options.stdin)
+  const timeout = options.timeoutMs === undefined ? undefined : setTimeout(() => {
+    forcedExitCode = 124
+    stderrChunks.push(Buffer.from('\nProcess timed out after ' + options.timeoutMs + ' ms.'))
+    child.kill()
+  }, options.timeoutMs)
   const exitCode = await new Promise(resolve => {
     child.once('error', error => {
-      stderr += String(error)
+      stderrChunks.push(Buffer.from(String(error)))
       resolve(1)
     })
     child.once('close', code => {
-      resolve(code ?? 1)
+      resolve(forcedExitCode ?? code ?? 1)
     })
   })
+  if (timeout) clearTimeout(timeout)
+  const stdout = Buffer.concat(stdoutChunks).toString('utf8')
+  const stderr = Buffer.concat(stderrChunks).toString('utf8')
   emit({
     ok: true,
     result: {
@@ -148,23 +177,25 @@ try {
   })
 }
 `
-const buildRunWrapper = (normalizedCode: string, globals: Record<string, unknown>, marker: string, returnValueKey: string, runtimeName: RuntimeName) => {
+const buildRunWrapper = (normalizedCode: string, globals: Record<string, unknown>, marker: string, exportsKey: string, returnValueKey: string, runtimeName: RuntimeName) => {
   return String.raw`
 ${buildModuleUrlSetup(normalizedCode, runtimeName)}
 ${serializationPrelude}
 
 const marker = ${toJavaScriptLiteral(marker)}
+const exportsKey = ${toJavaScriptLiteral(exportsKey)}
 const returnValueKey = ${toJavaScriptLiteral(returnValueKey)}
 
 const emit = payload => console.log(marker + JSON.stringify(payload))
 
 Object.assign(globalThis, ${toJavaScriptLiteral(globals)})
 delete globalThis[returnValueKey]
+delete globalThis[exportsKey]
 
 try {
-  const moduleNamespace = await import(moduleUrl)
+  await import(moduleUrl)
   emit({
-    exports: serializeTransportValue(Object.fromEntries(Object.entries(moduleNamespace))),
+    exports: serializeTransportValue(globalThis[exportsKey]),
     ok: true,
     returnValue: serializeTransportValue(globalThis[returnValueKey]),
   })
@@ -215,20 +246,19 @@ const toTransport = (options: RemoteTargetOptions): TargetTransport => {
 }
 
 export class RemoteTarget {
-  static exec(target: RemoteTargetInput, command: Array<string>, options?: RemoteTargetConstructorOptions) {
-    return new RemoteTarget(target, options).exec(command)
+  static exec(target: RemoteTargetInput, command: Array<string>, options?: RemoteTargetConstructorOptions, invocationOptions?: InvocationOptions) {
+    return new RemoteTarget(target, options).exec(command, invocationOptions)
   }
-  static run(target: RemoteTargetInput, input: RunInput, options?: RemoteTargetConstructorOptions) {
-    return new RemoteTarget(target, options).run(input)
+  static run(target: RemoteTargetInput, input: RunInput, options?: RemoteTargetConstructorOptions, invocationOptions?: RunInvocationOptions) {
+    return new RemoteTarget(target, options).run(input, invocationOptions)
   }
 
   readonly options: RemoteTargetOptions
   readonly transport: TargetTransport
-  #bootstrapRuntime?: RuntimeInfo
+  #bootstrapRuntime?: RuntimeInfo | null
+  #bootstrapRuntimePromise?: Promise<RuntimeInfo | undefined>
   #discovery?: DiscoveryInfo
-
-  #initialized = false
-
+  #initializationPromise?: Promise<this>
   #runtime?: RuntimeInfo
 
   constructor(input: RemoteTargetInput, extraOptions: RemoteTargetConstructorOptions = {}) {
@@ -246,12 +276,12 @@ export class RemoteTarget {
     this.transport = toTransport(this.options)
   }
 
-  async exec(command: Array<string>): Promise<ExecResult> {
+  async exec(command: Array<string>, invocationOptions: InvocationOptions = {}): Promise<ExecResult> {
     if (command.length === 0) {
       throw new Error('Cannot execute an empty command.')
     }
     if (this.options.host === 'local') {
-      const result = await this.transport.runShellNeutralCommand(command)
+      const result = await this.transport.runShellNeutralCommand(command, invocationOptions)
       return {
         ...result,
         command,
@@ -261,15 +291,17 @@ export class RemoteTarget {
     if (!bootstrapRuntime) {
       await this.init()
       const shellName = this.#discovery?.shell.name === 'powershell' ? 'powershell' : 'bash'
-      const fallbackResult = await this.transport.runShellCommand(buildShellCommand(command, shellName === 'powershell'))
+      const fallbackResult = await this.transport.runShellCommand(buildShellCommand(command, shellName === 'powershell'), invocationOptions)
       return {
         ...fallbackResult,
         command,
       }
     }
     const marker = `__remoteTargetExec_${crypto.randomUUID()}__`
-    const wrapper = buildExecWrapper(command, marker)
-    const invocation = await this.transport.runShellNeutralCommand(getRuntimeCommand(bootstrapRuntime.name), {
+    const wrapper = buildExecWrapper(command, marker, invocationOptions)
+    const invocation = await this.transport.runShellNeutralCommand(getRuntimeCommand(bootstrapRuntime), {
+      signal: invocationOptions.signal,
+      timeoutMs: invocationOptions.timeoutMs === undefined ? undefined : invocationOptions.timeoutMs + 1000,
       stdin: wrapper,
     })
     const parsed = parseMarkedJsonPayload<ExecPayload>(invocation.stdout, marker)
@@ -302,17 +334,20 @@ export class RemoteTarget {
   }
 
   async init() {
-    if (this.#initialized) {
-      return this
+    if (!this.#initializationPromise) {
+      this.#initializationPromise = (async () => {
+        try {
+          return await this.initialize()
+        } catch (error) {
+          this.#initializationPromise = undefined
+          throw error
+        }
+      })()
     }
-    const bootstrapRuntime = await this.resolveBootstrapRuntime()
-    this.#discovery = bootstrapRuntime ? await discoverTarget(this.transport, bootstrapRuntime) : await discoverWithoutRuntime(this.transport)
-    this.#runtime = selectRuntime(this.#discovery.runtimes, this.options.runtimeCandidates)
-    this.#initialized = true
-    return this
+    return this.#initializationPromise
   }
 
-  async run(input: RunInput): Promise<RunResult> {
+  async run(input: RunInput, invocationOptions: RunInvocationOptions = {}): Promise<RunResult> {
     await this.init()
     const runtime = this.#runtime
     if (!runtime) {
@@ -320,8 +355,9 @@ export class RemoteTarget {
     }
     const normalizedInput = await normalizeRunInput(input)
     const marker = `__remoteTargetRun_${crypto.randomUUID()}__`
-    const invocation = await this.transport.runShellNeutralCommand(getRuntimeCommand(runtime.name), {
-      stdin: buildRunWrapper(normalizedInput.normalizedCode, this.options.globals, marker, normalizedInput.returnValueKey, runtime.name),
+    const invocation = await this.transport.runShellNeutralCommand(getRuntimeCommand(runtime), {
+      ...invocationOptions,
+      stdin: buildRunWrapper(normalizedInput.normalizedCode, this.options.globals, marker, normalizedInput.exportsKey, normalizedInput.returnValueKey, runtime.name),
     })
     const parsed = parseMarkedJsonPayload<RunPayload>(invocation.stdout, marker)
     if (!parsed.payload) {
@@ -343,11 +379,29 @@ export class RemoteTarget {
     }
   }
 
+  private async initialize() {
+    const bootstrapRuntime = await this.resolveBootstrapRuntime()
+    this.#discovery = bootstrapRuntime ? await discoverTarget(this.transport, bootstrapRuntime) : await discoverWithoutRuntime(this.transport)
+    this.#runtime = selectRuntime(this.#discovery.runtimes, this.options.runtimeCandidates)
+    return this
+  }
+
   private async resolveBootstrapRuntime() {
-    if (this.#bootstrapRuntime) {
-      return this.#bootstrapRuntime
+    if (this.#bootstrapRuntime !== undefined) {
+      return this.#bootstrapRuntime ?? undefined
     }
-    this.#bootstrapRuntime = await probeBootstrapRuntime(this.transport)
-    return this.#bootstrapRuntime
+    if (!this.#bootstrapRuntimePromise) {
+      this.#bootstrapRuntimePromise = (async () => {
+        try {
+          const runtime = await probeBootstrapRuntime(this.transport)
+          this.#bootstrapRuntime = runtime ?? null
+          return runtime
+        } catch (error) {
+          this.#bootstrapRuntimePromise = undefined
+          throw error
+        }
+      })()
+    }
+    return this.#bootstrapRuntimePromise
   }
 }

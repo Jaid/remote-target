@@ -11,6 +11,7 @@
 /dist/
 /temp/
 /private/
+*.tsbuildinfo
 
 # dotenv
 .env

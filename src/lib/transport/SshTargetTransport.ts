@@ -13,7 +13,6 @@ type SshTargetTransportInput = {
 export class SshTargetTransport extends TargetTransport {
   readonly destination: string
   readonly host: string
-  id = 'ssh'
   readonly keyFile?: string
   readonly port?: number
   readonly user?: string
@@ -27,14 +26,12 @@ export class SshTargetTransport extends TargetTransport {
     this.user = user
   }
 
-  override runShellCommand(command: string): Promise<InvocationResult> {
-    return runProcess([...this.getSshBaseCommand(), command])
+  override runShellCommand(command: string, options: TransportCommandOptions = {}): Promise<InvocationResult> {
+    return runProcess([...this.getSshBaseCommand(), command], options)
   }
 
   override runShellNeutralCommand(command: Array<string>, options: TransportCommandOptions = {}): Promise<InvocationResult> {
-    return runProcess([...this.getSshBaseCommand(), ...command], {
-      stdin: options.stdin,
-    })
+    return runProcess([...this.getSshBaseCommand(), ...command], options)
   }
 
   private getSshBaseCommand() {
