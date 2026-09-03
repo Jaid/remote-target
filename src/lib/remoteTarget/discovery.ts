@@ -97,7 +97,7 @@ const emptyDiscoveryInfo = (): DiscoveryInfo => {
   }
 }
 const discoveryScript = (runtimeCandidates: Array<RuntimeName>) => String.raw`
-import fs from 'fs-extra'
+import {readFileSync} from 'node:fs'
 import os from 'node:os'
 import process from 'node:process'
 import {spawnSync} from 'node:child_process'

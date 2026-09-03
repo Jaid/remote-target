@@ -1,7 +1,6 @@
-/* eslint-disable typescript/no-restricted-imports -- build scripts use the platform API directly. */
 import fs from 'fs-extra'
 
-await rm('dist', {
+await fs.rm('dist', {
   force: true,
   recursive: true,
 })

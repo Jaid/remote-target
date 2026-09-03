@@ -1,10 +1,9 @@
-/* eslint-disable typescript/no-restricted-imports -- avoiding a dedicated test-only dependency here is preferable. */
 import type {LinuxDistribution, RuntimeName} from '#src/lib/remoteTarget/index.ts'
 
 import {afterAll, beforeAll, describe, expect, test} from 'bun:test'
-import fs from 'fs-extra'
-import * as path from 'forward-slash-path'
 
+import * as path from 'forward-slash-path'
+import fs from 'fs-extra'
 import makeSshKeys from 'make-ssh-keys'
 import {renderHandlebars} from 'zeug'
 
@@ -55,9 +54,9 @@ type RuntimeContext = {
   runtimeWorkFolder: string
 }
 
-const dockerfileTemplate = await readFile(path.join(import.meta.dir, 'lib/Dockerfile.hbs'), 'utf8')
-const helloScript = await readFile(path.join(import.meta.dir, 'fixture/script/hello.ts'), 'utf8')
-const namedExportsScript = await readFile(path.join(import.meta.dir, 'fixture/script/namedExports.ts'), 'utf8')
+const dockerfileTemplate = await fs.readFile(path.join(import.meta.dir, 'lib/Dockerfile.hbs'), 'utf8')
+const helloScript = await fs.readFile(path.join(import.meta.dir, 'fixture/script/hello.ts'), 'utf8')
+const namedExportsScript = await fs.readFile(path.join(import.meta.dir, 'fixture/script/namedExports.ts'), 'utf8')
 const baseCases = [
   {
     baseImage: 'ubuntu',
@@ -286,8 +285,8 @@ const getSshServerCommand = () => {
   return 'exec "$(command -v dropbear)" -F -E -R -s -g -p 22'
 }
 const createBaseContext = async (baseCase: BaseCase): Promise<BaseContext> => {
-  await mkdir(matrixRootFolder, {recursive: true})
-  const folder = await mkdtemp(path.join(matrixRootFolder, `${toDockerSlug(baseCase.id)}-`))
+  await fs.mkdir(matrixRootFolder, {recursive: true})
+  const folder = await fs.mkdtemp(path.join(matrixRootFolder, `${toDockerSlug(baseCase.id)}-`))
   const privateKeyFile = path.join(folder, 'id_ed25519')
   const keyComment = `remote-target-test-${toDockerSlug(baseCase.id)}`
   const {privateKey, publicKey} = await makeSshKeys()
@@ -372,14 +371,14 @@ const destroyRuntimeContext = async (runtimeContext: RuntimeContext | undefined)
   }
   await Promise.allSettled([
     runProcess(['docker', 'rm', '--force', runtimeContext.containerName]),
-    rm(runtimeContext.runtimeWorkFolder, {
+    fs.rm(runtimeContext.runtimeWorkFolder, {
       force: true,
       recursive: true,
     }),
   ])
 }
 const createRuntimeContext = async (baseCase: BaseCase, runtimeCase: RuntimeCase, baseContext: BaseContext): Promise<RuntimeContext> => {
-  const runtimeWorkFolder = await mkdtemp(path.join(baseContext.folder, `${runtimeCase.id}-`))
+  const runtimeWorkFolder = await fs.mkdtemp(path.join(baseContext.folder, `${runtimeCase.id}-`))
   const imageTag = `remote-target-matrix:${toDockerSlug(`${baseCase.baseImage}-${baseCase.baseImageVersion}-${runtimeCase.id}-${runtimeCase.version}`)}`
   const containerName = `${toDockerSlug(`${baseCase.baseImage}-${baseCase.baseImageVersion}-${runtimeCase.id}`)}-${crypto.randomUUID().slice(0, 8)}`
   const dockerfileFile = path.join(runtimeWorkFolder, 'Dockerfile')
@@ -432,7 +431,7 @@ for (const baseCase of baseCases) {
       if (!baseContext) {
         return
       }
-      await rm(baseContext.folder, {
+      await fs.rm(baseContext.folder, {
         force: true,
         recursive: true,
       })
