@@ -23,7 +23,7 @@
     "build": "bun run scripts/build.ts",
     "lint": "bunx --bun eslint . --max-warnings 0",
     "prepack": "bun run build",
-    "test": "bun test test/main.test.ts --max-concurrency 1",
+    "test": "bun test --max-concurrency 1 ./test",
     "test:integration": "bun test test/matrix.test.ts --max-concurrency 1",
     "test:package": "bun run scripts/testPackage.ts",
     "typecheck": "tsc --noEmit"
