@@ -38,6 +38,7 @@
     "tinyhand": "^0.2.0"
   },
   "devDependencies": {
+    "@types/bun": "^1.4.0",
     "@types/serialize-javascript": "^5.0.4",
     "eslint": "^10.9.1",
     "eslint-config-jaid": "^26.0.0",
