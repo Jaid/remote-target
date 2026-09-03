@@ -2,7 +2,7 @@
 import type {LinuxDistribution, RuntimeName} from '#src/lib/remoteTarget/index.ts'
 
 import {afterAll, beforeAll, describe, expect, test} from 'bun:test'
-import {mkdir, mkdtemp, readFile, rm} from 'node:fs/promises'
+import fs from 'fs-extra'
 import * as path from 'forward-slash-path'
 
 import makeSshKeys from 'make-ssh-keys'

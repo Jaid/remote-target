@@ -1,5 +1,5 @@
 /* eslint-disable typescript/no-restricted-imports -- build scripts use the platform API directly. */
-import {rm} from 'node:fs/promises'
+import fs from 'fs-extra'
 
 await rm('dist', {
   force: true,
