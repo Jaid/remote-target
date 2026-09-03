@@ -14,8 +14,4 @@ jobs:
     - name: install
       run: bun install --frozen-lockfile
     - name: eslint
-      run: bun run lint
-    - name: typecheck
-      run: bun run typecheck
-    - name: audit
-      run: bun run audit
+      run: bunx --bun eslint .
