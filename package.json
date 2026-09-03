@@ -32,6 +32,7 @@
     "@babel/core": "^8.0.1",
     "@babel/plugin-transform-react-jsx": "^8.0.1",
     "@babel/plugin-transform-typescript": "^8.0.1",
+    "make-argv": "^0.1.0",
     "optis": "^0.1.0",
     "serialize-javascript": "^7.0.7",
     "tinyhand": "^0.1.0"

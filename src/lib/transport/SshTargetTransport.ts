@@ -1,5 +1,7 @@
 import type {InvocationResult, TransportCommandOptions} from '../remoteTarget/types.ts'
 
+import makeArgv from 'make-argv'
+
 import {runProcess} from '../remoteTarget/runProcess.ts'
 import {TargetTransport} from './base/TargetTransport.ts'
 
@@ -35,14 +37,19 @@ export class SshTargetTransport extends TargetTransport {
   }
 
   private getSshBaseCommand() {
-    const command = ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=accept-new']
-    if (this.port !== undefined) {
-      command.push('-p', String(this.port))
-    }
-    if (this.keyFile) {
-      command.push('-i', this.keyFile)
-    }
-    command.push(this.destination)
-    return command
+    return [
+      'ssh',
+      ...makeArgv({
+        T: true,
+        o: [
+          'BatchMode=yes',
+          'ConnectTimeout=10',
+          'StrictHostKeyChecking=accept-new',
+        ],
+        p: this.port,
+        i: this.keyFile || undefined,
+      }, {keyStyle: false}),
+      this.destination,
+    ]
   }
 }
