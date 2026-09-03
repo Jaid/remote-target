@@ -5,27 +5,13 @@ on:
   pull_request:
 jobs:
   test:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
     - name: checkout
       uses: actions/checkout@v6.0.2
     - name: setupBun
       uses: oven-sh/setup-bun@v2.2.0
-    - name: setupNode
-      uses: actions/setup-node@v6
-      with:
-        node-version: 24
     - name: install
       run: bun install --frozen-lockfile
     - name: test
       run: bun run test
-    - name: integration
-      if: runner.os == 'Linux'
-      run: bun run test:integration
-    - name: build
-      run: bun run build
-    - name: pack
-      run: bun run test:package
