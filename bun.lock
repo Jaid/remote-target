@@ -8,6 +8,7 @@
         "@babel/core": "^8.0.1",
         "@babel/plugin-transform-react-jsx": "^8.0.1",
         "@babel/plugin-transform-typescript": "^8.0.1",
+        "forward-slash-path": "^0.3.0",
         "make-argv": "^0.1.0",
         "optis": "^0.1.0",
         "serialize-javascript": "^7.1.1",

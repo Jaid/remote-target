@@ -1,6 +1,6 @@
 /* eslint-disable typescript/no-restricted-imports -- build scripts use the platform API directly. */
 import {mkdir, rm, writeFile} from 'node:fs/promises'
-import path from 'node:path'
+import * as path from 'forward-slash-path'
 
 const folder = path.resolve('temp/packageSmoke')
 await rm(folder, {

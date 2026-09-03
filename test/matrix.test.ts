@@ -3,7 +3,7 @@ import type {LinuxDistribution, RuntimeName} from '#src/lib/remoteTarget/index.t
 
 import {afterAll, beforeAll, describe, expect, test} from 'bun:test'
 import {mkdir, mkdtemp, readFile, rm} from 'node:fs/promises'
-import path from 'node:path'
+import * as path from 'forward-slash-path'
 
 import makeSshKeys from 'make-ssh-keys'
 import {renderHandlebars} from 'zeug'
