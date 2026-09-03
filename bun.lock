@@ -15,7 +15,6 @@
       },
       "devDependencies": {
         "@types/serialize-javascript": "^5.0.4",
-        "bun-types": "^1.4.0",
         "eslint": "^10.9.1",
         "eslint-config-jaid": "^26.0.0",
         "make-ssh-keys": "^1.0.1",
