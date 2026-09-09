@@ -1,6 +1,3 @@
 {
-  "extends": "./node_modules/tsconfig-jaid-bun/base.json",
-  "exclude": [
-    "test/fixture/script/hello.ts"
-  ]
+  "extends": "./node_modules/tsconfig-jaid-bun/base.json"
 }
