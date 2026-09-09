@@ -1,9 +1,9 @@
-import type {RuntimeName, TransportCommandOptions, TransportResult} from '#src/lib/remoteTarget/types.ts'
+import type {InvocationResult, RuntimeName, TransportCommandOptions} from '#src/lib/remoteTarget/types.ts'
 
 import {expect, test} from 'bun:test'
 
 import {getRuntimeCommand} from '#src/lib/remoteTarget/discovery.ts'
-import {readPayload} from '#src/lib/remoteTarget/protocol.ts'
+import {ResultFrame} from '#src/lib/remoteTarget/ResultFrame.ts'
 import {runProcess} from '#src/lib/remoteTarget/runProcess.ts'
 import {deserializeTransportValue, serializeTransportValue} from '#src/lib/remoteTarget/serialize.ts'
 import {buildExecWrapper} from '#src/lib/remoteTarget/wrappers.ts'
@@ -19,7 +19,7 @@ class DelayedTransport extends TargetTransport {
   override runShellCommand(command: string, options?: TransportCommandOptions) {
     return this.local.runShellCommand(command, options)
   }
-  override async runShellNeutralCommand(command: Array<string>, options?: TransportCommandOptions): Promise<TransportResult> {
+  override async runShellNeutralCommand(command: Array<string>, options?: TransportCommandOptions): Promise<InvocationResult> {
     this.calls += 1
     if (this.calls === 1) {
       await Bun.sleep(this.delay)
@@ -29,6 +29,24 @@ class DelayedTransport extends TargetTransport {
       throw new Error('transient transport failure')
     }
     return this.local.runShellNeutralCommand(command, options)
+  }
+}
+class DiscoveryTimeoutTransport extends TargetTransport {
+  readonly commands: Array<Array<string>> = []
+
+  override runShellCommand(): Promise<InvocationResult> {
+    throw new Error('Unexpected shell command.')
+  }
+
+  override async runShellNeutralCommand(command: Array<string>): Promise<InvocationResult> {
+    this.commands.push(command)
+    return {
+      duration: 1,
+      exitCode: 124,
+      failure: 'timeout',
+      stderr: 'transport timed out',
+      system: {pid: 0},
+    }
   }
 }
 const createDelayed = () => {
@@ -74,6 +92,28 @@ test('exec returns a structured initialization timeout', async () => {
   expect(result.exitCode).toBe(124)
   expect(result.failure).toBe('timeout')
   await target.init()
+})
+test('exec rejects a transport timeout during discovery instead of claiming the command ran', async () => {
+  const target = new RemoteTarget('fixture')
+  const transport = new DiscoveryTimeoutTransport
+  Object.defineProperty(target, 'transport', {value: transport})
+  await expect(target.exec(['definitely-never-ran'])).rejects.toMatchObject({
+    result: {
+      exitCode: 124,
+      failure: 'timeout',
+      stderr: 'transport timed out',
+    },
+  })
+  expect(transport.commands.some(command => command[0] === 'definitely-never-ran')).toBe(false)
+})
+test('runtime-backed exec lets the command timeout frame preserve partial output', async () => {
+  const target = new RemoteTarget('fixture', {runtimeCandidates: ['bun']})
+  Object.defineProperty(target, 'transport', {value: new LocalTargetTransport})
+  await target.init()
+  const result = await target.exec([process.execPath, '--eval', 'process.stdout.write("started"); setTimeout(() => {}, 5000)'], {timeoutMs: 250})
+  expect(result.exitCode).toBe(124)
+  expect(result.failure).toBe('timeout')
+  expect(result.stdout).toBe('started')
 })
 test('transient initialization failures can be retried', async () => {
   const {target, transport} = createDelayed()
@@ -221,22 +261,19 @@ for (const runtime of ['bun', 'node', 'deno'] as const satisfies Array<RuntimeNa
     }
   })
   test.skipIf(!available)(`${runtime}: generated exec uses the shared stdin-safe process runner`, async () => {
-    const marker = `__exec_${crypto.randomUUID()}`
-    const wrapper = buildExecWrapper(['node', '--eval', 'process.stdin.pipe(process.stdout)'], marker, {
+    const frame = new ResultFrame(1_000_000)
+    const wrapper = buildExecWrapper(['node', '--eval', 'process.stdin.pipe(process.stdout)'], frame.marker, {
       stdin: 'hello\0\u2192',
       timeoutMs: 2000,
     })
     const invocation = await runProcess(getRuntimeCommand(runtime), {
+      frame: frame.options(),
       stdin: wrapper,
       timeoutMs: 5000,
-      protocol: {
-        marker,
-        maxBytes: 1_000_000,
-      },
     })
-    const {payload} = readPayload<{ok: boolean
+    const payload = frame.read<{ok: boolean
       result: {exitCode: number
-        stdout: string}}>(invocation, 'exec', 'fixture')
+        stdout: string}}>(invocation, 'Generated exec failed.')
     expect(payload.result.exitCode).toBe(0)
     expect(payload.result.stdout).toBe('hello\0\u2192')
   })

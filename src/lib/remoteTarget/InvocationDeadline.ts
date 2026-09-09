@@ -1,13 +1,25 @@
-import type {InvocationOptions} from './types.ts'
+import type {InvocationOptions, InvocationResult} from './types.ts'
 
 import {RemoteTargetError} from './RemoteTargetError.ts'
 
+export class InvocationTimeoutError extends RemoteTargetError {
+  readonly owner: object
+
+  constructor(message: string, result: InvocationResult, owner: object) {
+    super(message, result)
+    this.name = 'InvocationTimeoutError'
+    this.owner = owner
+  }
+}
+
 export class InvocationDeadline {
   readonly #options: Pick<InvocationOptions, 'signal' | 'timeoutMs'>
+  readonly #owner: object
   readonly #startedAt = performance.now()
 
-  constructor(options: Pick<InvocationOptions, 'signal' | 'timeoutMs'> = {}) {
+  constructor(options: Pick<InvocationOptions, 'signal' | 'timeoutMs'> = {}, owner = {}) {
     this.#options = options
+    this.#owner = owner
     if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 0 || options.timeoutMs > 2_147_483_647)) {
       throw new RangeError('timeoutMs must be an integer between 0 and 2147483647.')
     }
@@ -74,12 +86,12 @@ export class InvocationDeadline {
 
   #timeoutError() {
     const message = `Invocation timed out after ${this.#options.timeoutMs} ms.`
-    return new RemoteTargetError(message, {
+    return new InvocationTimeoutError(message, {
       duration: this.elapsed,
       exitCode: 124,
       failure: 'timeout',
       stderr: message,
       system: {pid: 0},
-    })
+    }, this.#owner)
   }
 }

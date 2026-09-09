@@ -165,7 +165,7 @@ A call’s `timeoutMs` covers waiting for initialization, normalization and exec
 
 ## Direct transport integration
 
-The existing `target.transport.runShellNeutralCommand(argv, options)` interface remains available for custom runners such as Mage. Without internal protocol options, stdout is returned unchanged: remote-target does not interpret an application’s JSON, base64 output or marker-like text.
+The existing `target.transport.runShellNeutralCommand(argv, options)` interface remains available for custom runners such as Mage. Without internal framing options, stdout is returned unchanged: remote-target does not interpret an application’s JSON, base64 output or marker-like text.
 
 ```ts
 const target = new RemoteTarget('container', {runtimeCandidates: ['bun']})
@@ -191,4 +191,4 @@ Select `runtimeCandidates: ['bun']` for the command form above. Node and Deno re
 - raw function input is serialized with `Function.prototype.toString()` and must be self-contained. Script strings support import syntax but do not capture caller closures either. Pass caller values through explicit `globals` injection.
 - SSH uses batch mode, a 10-second connection timeout and `StrictHostKeyChecking=accept-new` by default. Pre-provision a known-hosts file and set `strictHostKeyChecking: 'yes'` when first-use trust is unsuitable.
 - timeout and cancellation cleanup first request termination, then escalate after 500 ms and bound stream cleanup. This can add up to roughly one second after a deadline. Killing an SSH client does not guarantee remote process-tree cleanup; commands that survive connection teardown require target-specific cleanup.
-- integration tests require Docker, SSH and `ssh-keygen`. `REMOTE_TARGET_SKIP_INTEGRATION=1` skips the matrix before probing those tools. The matrix isolates SSH configuration and host-key storage, bounds child processes and removes only its own containers, image tags and temporary files.
+- integration tests require Docker and SSH. Test keys are generated with `make-ssh-keys`. `REMOTE_TARGET_SKIP_INTEGRATION=1` skips the matrix before probing those tools. The matrix isolates SSH configuration and host-key storage, bounds child processes and removes only its own containers, image tags and temporary files.

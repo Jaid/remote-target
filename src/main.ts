@@ -6,11 +6,10 @@ import optis from 'optis'
 import tinyhand from 'tinyhand'
 
 import {discoverWithoutRuntime, getRuntimeCommand, probeBootstrapRuntime} from './lib/remoteTarget/discovery.ts'
-import {InvocationDeadline} from './lib/remoteTarget/InvocationDeadline.ts'
+import {InvocationDeadline, InvocationTimeoutError} from './lib/remoteTarget/InvocationDeadline.ts'
 import {normalizeRunInput} from './lib/remoteTarget/normalize.ts'
-import {isInvocationResult} from './lib/remoteTarget/protocol.ts'
 import {RemoteTargetError} from './lib/remoteTarget/RemoteTargetError.ts'
-import {ResultFrame} from './lib/remoteTarget/ResultFrame.ts'
+import {isInvocationResult, ResultFrame} from './lib/remoteTarget/ResultFrame.ts'
 import {deserializeTransportValue} from './lib/remoteTarget/serialize.ts'
 import {buildExecWrapper, buildRunWrapper} from './lib/remoteTarget/wrappers.ts'
 import {LocalTargetTransport} from './lib/transport/LocalTargetTransport.ts'
@@ -33,6 +32,13 @@ const normalizeRuntimeCandidates = (value: Array<RuntimeName> | undefined) => {
     throw new Error(`Unsupported runtime candidate: ${String(invalid)}`)
   }
   return candidates.length === 0 ? [...supportedRuntimeNames] : candidates
+}
+const getExecCommandTimeout = (remaining: number | undefined) => {
+  if (remaining === undefined) {
+    return
+  }
+  const resultFlushReserve = Math.min(100, Math.max(1, Math.floor(remaining / 2)))
+  return Math.max(1, remaining - resultFlushReserve)
 }
 const optionsSchema = optis({
   defaults: {
@@ -100,8 +106,9 @@ class RemoteTarget {
     if (!command[0]) {
       throw new TypeError('Cannot execute an empty command.')
     }
+    const deadlineOwner = {}
     try {
-      const deadline = new InvocationDeadline(invocationOptions)
+      const deadline = new InvocationDeadline(invocationOptions, deadlineOwner)
       if (this.options.host === 'local') {
         const result = await this.transport.runShellNeutralCommand(command, {
           ...invocationOptions,
@@ -129,7 +136,7 @@ class RemoteTarget {
       }
       const wrapper = buildExecWrapper(command, frame.marker, {
         ...invocationOptions,
-        ...deadline.options(),
+        timeoutMs: getExecCommandTimeout(deadline.remaining()),
       })
       const invocation = await this.transport.runShellNeutralCommand(getRuntimeCommand(runtime), {
         ...deadline.options(),
@@ -157,7 +164,7 @@ class RemoteTarget {
       }
     } catch (error) {
       invocationOptions.signal?.throwIfAborted()
-      if (error instanceof RemoteTargetError && error.result.exitCode === 124) {
+      if (error instanceof InvocationTimeoutError && error.owner === deadlineOwner) {
         return {
           ...error.result,
           command,

@@ -34,9 +34,6 @@ export type InvocationResult = {
   system: {pid: number}
 }
 
-export type TransportResult = InvocationResult & {protocol?: {error?: string
-  json?: string}}
-
 export type ExecResult = InvocationResult & {command: Array<string>}
 
 export type RuntimeInfo = {file: string
@@ -95,8 +92,6 @@ export type TransportCommandOptions = {
     onFrame: (json: string) => void
   }
   maxOutputBytes?: number
-  protocol?: {marker: string
-    maxBytes: number}
   /** Treat an early stdin closure as failed delivery rather than an ordinary unused pipe. */
   requireStdinDelivery?: boolean
   signal?: AbortSignal
@@ -104,7 +99,7 @@ export type TransportCommandOptions = {
   timeoutMs?: number
 }
 
-export type InvocationOptions = Omit<TransportCommandOptions, 'frame' | 'protocol' | 'requireStdinDelivery'> & {
+export type InvocationOptions = Omit<TransportCommandOptions, 'frame' | 'requireStdinDelivery'> & {
   /** Maximum JSON result size, separate from user stdout/stderr. Defaults to 16 million bytes. */
   maxResultBytes?: number
 }

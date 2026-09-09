@@ -1,4 +1,4 @@
-import type {SshShell, TransportCommandOptions, TransportResult} from '#src/lib/remoteTarget/types.ts'
+import type {InvocationResult, SshShell, TransportCommandOptions} from '#src/lib/remoteTarget/types.ts'
 
 import {expect, test} from 'bun:test'
 import {tmpdir} from 'node:os'
@@ -7,7 +7,7 @@ import * as path from 'forward-slash-path'
 import fs from 'fs-extra'
 
 import {runProcess} from '#src/lib/remoteTarget/runProcess.ts'
-import {encodeShellCommand} from '#src/lib/transport/encodeShellCommand.ts'
+import {encodeShellCommand, escapePosix} from '#src/lib/transport/encodeShellCommand.ts'
 import {SshTargetTransport} from '#src/lib/transport/SshTargetTransport.ts'
 import RemoteTarget from '#src/main.ts'
 
@@ -24,7 +24,7 @@ class ShellTransport extends SshTargetTransport {
   override runShellCommand(command: string, options?: TransportCommandOptions) {
     return runProcess([...this.prefix, command], options)
   }
-  override async runShellNeutralCommand(command: Array<string>, options?: TransportCommandOptions): Promise<TransportResult> {
+  override async runShellNeutralCommand(command: Array<string>, options?: TransportCommandOptions): Promise<InvocationResult> {
     if (this.noRuntime && ['bun', 'node', 'deno'].includes(command[0]) && command[1] === '--version') {
       return {
         duration: 0,
@@ -55,6 +55,7 @@ test('SSH destinations cannot become options and host-key paths retain spaces', 
   expect(args.indexOf('StrictHostKeyChecking=yes')).toBeLessThan(args.indexOf('StrictHostKeyChecking=accept-new'))
 })
 test('shell encoding rejects NUL and an empty executable', () => {
+  expect(escapePosix`tool ${['a b', '', "can't"]}`).toBe("tool 'a b' '' 'can'\"'\"'t'")
   for (const shell of ['posix', 'fish', 'powershell', 'cmd'] as const) {
     expect(() => encodeShellCommand(['echo', '\0'], shell)).toThrow('NUL')
     expect(() => encodeShellCommand([''], shell)).toThrow('empty command')
@@ -99,7 +100,10 @@ for (const shell of shells) {
       if (process.platform !== 'win32') {
         await fs.chmod(file, 0o700)
       }
-      const values = ['', 'hello world', "a'b", 'Don\u2019t', '"quoted"', '$HOME', '%PATH%', '\u0060tick\u0060', 'a\\b\\', 'line\nbreak', 'x; echo INJECTED', '\u2192\u{1F9D9}']
+      const values = ['', 'hello world', "a'b", 'Don\u2019t', '"quoted"', '$HOME', '%PATH%', '\u0060tick\u0060', 'line\nbreak', 'x; echo INJECTED', '\u2192\u{1F9D9}']
+      if (shell.name === 'fish') {
+        values.push('\\', 'a\\', 'a\\b\\', "'", String.raw`\'`, '\\\\')
+      }
       if (process.platform !== 'win32' || shell.name !== 'posix') {
         values.push('carriage\rreturn')
       }

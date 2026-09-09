@@ -1,10 +1,26 @@
-import type {InvocationResult, TransportCommandOptions} from './types.ts'
+import type {InvocationResult, ProcessFailure, TransportCommandOptions} from './types.ts'
 
 import {RemoteTargetError} from './RemoteTargetError.ts'
 import {deserializeTransportValue} from './serialize.ts'
 
 type Payload = {error?: unknown
   ok: boolean}
+
+export const isInvocationResult = (value: unknown): value is InvocationResult => {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const result = value as Record<string, unknown>
+  const system = result.system
+  const failures: Array<ProcessFailure> = ['output-limit', 'protocol', 'signal', 'spawn', 'stdin', 'stream', 'timeout']
+  return typeof result.duration === 'number' && Number.isFinite(result.duration) && result.duration >= 0
+    && typeof result.exitCode === 'number' && Number.isInteger(result.exitCode)
+    && (result.stdout === undefined || typeof result.stdout === 'string')
+    && (result.stderr === undefined || typeof result.stderr === 'string')
+    && (result.errorCode === undefined || typeof result.errorCode === 'string')
+    && (result.failure === undefined || failures.includes(result.failure as ProcessFailure))
+    && !!system && typeof system === 'object' && 'pid' in system && typeof system.pid === 'number' && Number.isInteger(system.pid) && system.pid >= 0
+}
 
 export class ResultFrame {
   readonly marker = `__remoteTarget_${crypto.randomUUID()}__`

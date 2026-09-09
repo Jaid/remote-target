@@ -1,7 +1,7 @@
-import type {ProcessFailure, TransportCommandOptions, TransportResult} from './types.ts'
+import type {InvocationResult, ProcessFailure, TransportCommandOptions} from './types.ts'
 
 // All runtime dependencies belong inside this function: the same implementation is embedded in remote wrappers.
-export async function runProcess(command: Array<string>, options: TransportCommandOptions = {}): Promise<TransportResult> {
+export async function runProcess(command: Array<string>, options: TransportCommandOptions = {}): Promise<InvocationResult> {
   const startedAt = performance.now()
   options.signal?.throwIfAborted()
   const [file, ...args] = command
@@ -28,7 +28,7 @@ export async function runProcess(command: Array<string>, options: TransportComma
   const {spawn} = await import('node:child_process')
   const {Buffer} = await import('node:buffer')
   options.signal?.throwIfAborted()
-  return new Promise<TransportResult>((resolve, reject) => {
+  return new Promise<InvocationResult>((resolve, reject) => {
     const child = spawn(file, args, {stdio: ['pipe', 'pipe', 'pipe']})
     const stdoutChunks: Array<Buffer> = []
     const stderrChunks: Array<Buffer> = []
@@ -41,20 +41,7 @@ export async function runProcess(command: Array<string>, options: TransportComma
     let settled = false
     let aborted = false
     let terminating = false
-    const protocol: TransportResult['protocol'] = options.protocol ? {} : undefined
-    const frame = options.frame ?? (options.protocol ? {
-      ...options.protocol,
-      onFrame: (json: string) => {
-        if (protocol) {
-          protocol.json = json
-        }
-      },
-      onError: (message: string) => {
-        if (protocol) {
-          protocol.error = message
-        }
-      },
-    } : undefined)
+    const frame = options.frame
     const marker = frame ? Buffer.from(frame.marker) : undefined
     let pending = Buffer.alloc(0)
     let inFrame = false
@@ -99,7 +86,6 @@ export async function runProcess(command: Array<string>, options: TransportComma
       const stdout = Buffer.concat(stdoutChunks).toString('utf8')
       const stderr = Buffer.concat(stderrChunks).toString('utf8') + diagnostics.map(message => `\n${message}`).join('')
       resolve({
-        ...protocol ? {protocol} : {},
         ...failure ? {failure} : {},
         ...errorCode ? {errorCode} : {},
         duration: performance.now() - startedAt,

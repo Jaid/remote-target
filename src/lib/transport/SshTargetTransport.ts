@@ -1,4 +1,4 @@
-import type {RemoteTargetOptions, ShellInfo, SshShell, TransportCommandOptions, TransportResult} from '../remoteTarget/types.ts'
+import type {InvocationResult, RemoteTargetOptions, ShellInfo, SshShell, TransportCommandOptions} from '../remoteTarget/types.ts'
 
 import makeArgv from 'make-argv'
 
@@ -60,11 +60,11 @@ export class SshTargetTransport extends TargetTransport {
     ]
   }
 
-  override runShellCommand(command: string, options: TransportCommandOptions = {}): Promise<TransportResult> {
+  override runShellCommand(command: string, options: TransportCommandOptions = {}): Promise<InvocationResult> {
     return this.runSsh(command, options)
   }
 
-  override async runShellNeutralCommand(command: Array<string>, options: TransportCommandOptions = {}): Promise<TransportResult> {
+  override async runShellNeutralCommand(command: Array<string>, options: TransportCommandOptions = {}): Promise<InvocationResult> {
     const deadline = new InvocationDeadline(options)
     if (!command[0] || command.some(argument => argument.includes('\0'))) {
       throw new TypeError('Expected a non-empty command without NUL arguments.')
@@ -81,7 +81,7 @@ export class SshTargetTransport extends TargetTransport {
     }
   }
 
-  protected runSsh(command: string, options: TransportCommandOptions): Promise<TransportResult> {
+  protected runSsh(command: string, options: TransportCommandOptions): Promise<InvocationResult> {
     return runProcess([...this.getSshBaseCommand(), command], options)
   }
 
