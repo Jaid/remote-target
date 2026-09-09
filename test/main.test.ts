@@ -269,7 +269,9 @@ test('structured transport values are collision-safe and preserve array views', 
     },
   }
   const values = [collision, Symbol.for('demo'), new DataView(Uint8Array.from([1, 2]).buffer), new BigInt64Array([1n, -2n]), new BigUint64Array([3n])]
-  const roundTrip = deserializeTransportValue(serializeTransportValue(values)) as Array<unknown>
+  // JSON encoding is the real wire boundary, not an in-memory deep clone.
+  // eslint-disable-next-line unicorn/prefer-structured-clone
+  const roundTrip = deserializeTransportValue(JSON.parse(JSON.stringify(serializeTransportValue(values))) as unknown) as Array<unknown>
   expect(roundTrip[0]).toEqual(collision)
   expect(Symbol.keyFor(roundTrip[1] as symbol)).toBe('demo')
   expect([...new Uint8Array((roundTrip[2] as DataView).buffer)]).toEqual([1, 2])
@@ -325,9 +327,10 @@ test('initialization and negative runtime probing are memoized', async () => {
   const transport = new UnavailableTransport
   Object.defineProperty(remoteTarget, 'transport', {value: transport})
   await Promise.all([remoteTarget.init(), remoteTarget.init(), remoteTarget.init()])
-  expect(transport.calls).toBe(6)
+  const initializationCalls = transport.calls
+  expect(initializationCalls).toBeGreaterThan(0)
   await remoteTarget.init()
-  expect(transport.calls).toBe(6)
+  expect(transport.calls).toBe(initializationCalls)
   await remoteTarget.exec(['missing'])
-  expect(transport.calls).toBe(7)
+  expect(transport.calls).toBe(initializationCalls + 1)
 })

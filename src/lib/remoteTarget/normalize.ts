@@ -1,15 +1,13 @@
 import type {NormalizedRunInput, RunInput} from './types.ts'
 import type {NodePath, PluginObject} from '@babel/core'
 
-import {createRequire} from 'node:module'
+import {types as t, transformAsync} from '@babel/core'
+import transformReactJsx from '@babel/plugin-transform-react-jsx'
+import transformTypeScript from '@babel/plugin-transform-typescript'
 
 import {toJavaScriptLiteral} from './toJavaScriptLiteral.ts'
 
-const moduleRequire = createRequire(import.meta.url)
-const {transformAsync, types: t} = moduleRequire('@babel/core') as typeof import('@babel/core')
 const parserPlugins = ['decorators-legacy', 'jsx', 'typescript'] as const
-const transformReactJsxPluginName = '@babel/plugin-transform-react-jsx'
-const transformTypeScriptPluginName = '@babel/plugin-transform-typescript'
 const largeSourceCompactThreshold = 500_000
 const getExportedName = (node: {name?: string
   value?: unknown}) => {
@@ -183,11 +181,8 @@ const ${jsxFactoryName} = (type, props, ...children) => {
         state: rewriteState,
       }),
       [
-        transformTypeScriptPluginName, {
-          allExtensions: true,
-          allowDeclareFields: true,
+        transformTypeScript, {
           allowNamespaces: true,
-          isTSX: true,
           jsxPragma: jsxFactoryName,
           jsxPragmaFrag: jsxFragmentName,
           onlyRemoveTypeImports: false,
@@ -195,7 +190,7 @@ const ${jsxFactoryName} = (type, props, ...children) => {
         },
       ],
       [
-        transformReactJsxPluginName, {
+        transformReactJsx, {
           pragma: jsxFactoryName,
           pragmaFrag: jsxFragmentName,
           runtime: 'classic',

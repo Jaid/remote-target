@@ -8,6 +8,7 @@ import makeSshKeys from 'make-ssh-keys'
 import {renderHandlebars} from 'zeug'
 
 import {runProcess} from '#src/lib/remoteTarget/runProcess.ts'
+import {SshTargetTransport} from '#src/lib/transport/SshTargetTransport.ts'
 import RemoteTarget from '#src/main.ts'
 
 type BaseCase = {
@@ -52,6 +53,7 @@ type RuntimeContext = {
   remoteTarget: RemoteTarget
   runtimeInfo: ReturnType<RemoteTarget['getRuntime']>
   runtimeWorkFolder: string
+  sshConfigFile: string
 }
 
 const dockerfileTemplate = await fs.readFile(path.join(import.meta.dir, 'lib/Dockerfile.hbs'), 'utf8')
@@ -101,24 +103,29 @@ const baseCases = [
     kind: 'nix',
   },
 ] as const satisfies Array<BaseCase>
+const runtimeVersions = {
+  bun: '1.3.14',
+  deno: '2.8.0',
+  node: '26.2.0',
+}
 const runtimeCases = [
   {
     binarySourcePath: '/usr/local/bin/bun',
-    builderImage: 'oven/bun:1.3.14',
+    builderImage: `oven/bun:${runtimeVersions.bun}`,
     id: 'bun',
-    version: '1.3.14',
+    version: runtimeVersions.bun,
   },
   {
     binarySourcePath: '/usr/bin/deno',
-    builderImage: 'denoland/deno:2.8.0',
+    builderImage: `denoland/deno:${runtimeVersions.deno}`,
     id: 'deno',
-    version: '2.8.1',
+    version: runtimeVersions.deno,
   },
   {
     binarySourcePath: '/usr/local/bin/node',
-    builderImage: 'node:26.2.0-bookworm-slim',
+    builderImage: `node:${runtimeVersions.node}-bookworm-slim`,
     id: 'node',
-    version: '26.3.1',
+    version: runtimeVersions.node,
   },
 ] as const satisfies Array<RuntimeCase>
 const scriptCases = [
@@ -146,47 +153,6 @@ const buildTimeoutMs = 1_800_000
 const cleanupTimeoutMs = 120_000
 const commandTimeoutMs = 120_000
 const matrixRootFolder = path.join(import.meta.dir, '../private/agent/matrix')
-const normalizePath = (value: string) => value.replaceAll('\\', '/')
-const ensureTrailingNewline = (value: string) => {
-  return value.endsWith('\n') ? value : `${value}\n`
-}
-const encodeSshString = (value: Buffer | string) => {
-  const content = typeof value === 'string' ? Buffer.from(value, 'utf8') : Buffer.from(value)
-  const output = Buffer.allocUnsafe(4 + content.length)
-  output.writeUInt32BE(content.length, 0)
-  content.copy(output, 4)
-  return output
-}
-const isOpenSshEd25519PublicKeyBody = (value: Buffer) => {
-  if (value.length < 4) {
-    return false
-  }
-  const keyTypeLength = value.readUInt32BE(0)
-  const keyTypeStart = 4
-  const keyTypeEnd = keyTypeStart + keyTypeLength
-  if (keyTypeEnd + 4 > value.length) {
-    return false
-  }
-  const keyType = value.subarray(keyTypeStart, keyTypeEnd).toString('utf8')
-  const keyLength = value.readUInt32BE(keyTypeEnd)
-  return keyType === 'ssh-ed25519' && keyLength === 32 && keyTypeEnd + 4 + keyLength === value.length
-}
-// make-ssh-keys currently prefixes SPKI bytes with ssh-ed25519, while authorized_keys expects OpenSSH's wire format.
-const toOpenSshPublicKey = async (value: string, comment?: string) => {
-  const [prefix = '', body = '', ...rest] = value.trim().split(/\s+/u)
-  if (prefix !== 'ssh-ed25519' || body.length === 0) {
-    throw new Error(`Expected an ssh-ed25519 public key, got ${JSON.stringify(value)}.`)
-  }
-  const decodedBody = Buffer.from(body, 'base64')
-  let normalizedBody = body
-  if (!isOpenSshEd25519PublicKeyBody(decodedBody)) {
-    const importedPublicKey = await crypto.subtle.importKey('spki', decodedBody, 'Ed25519', true, ['verify'])
-    const rawPublicKey = Buffer.from(await crypto.subtle.exportKey('raw', importedPublicKey))
-    normalizedBody = Buffer.concat([encodeSshString('ssh-ed25519'), encodeSshString(rawPublicKey)]).toString('base64')
-  }
-  const normalizedComment = comment ?? (rest.join(' ') || undefined)
-  return ['ssh-ed25519', normalizedBody, normalizedComment].filter(Boolean).join(' ')
-}
 const quoteShell = (value: string) => {
   return JSON.stringify(value)
 }
@@ -205,8 +171,11 @@ const tail = (value: string | undefined, maxLength = 4000) => {
   }
   return value.length <= maxLength ? value : value.slice(-maxLength)
 }
-const ensureCommandSucceeded = async (command: Array<string>, purpose: string) => {
-  const result = await runProcess(command)
+const ensureCommandSucceeded = async (command: Array<string>, purpose: string, timeoutMs = commandTimeoutMs - 5000) => {
+  const result = await runProcess(command, {
+    timeoutMs,
+    maxOutputBytes: 2_000_000,
+  })
   if (result.exitCode === 0) {
     return result
   }
@@ -214,13 +183,17 @@ const ensureCommandSucceeded = async (command: Array<string>, purpose: string) =
 }
 const isCommandAvailable = async (command: Array<string>) => {
   try {
-    const result = await runProcess(command)
+    const result = await runProcess(command, {
+      timeoutMs: 5000,
+      maxOutputBytes: 64_000,
+    })
     return result.exitCode === 0
   } catch {
     return false
   }
 }
-const matrixPrerequisitesAvailable = await (async () => {
+const skipIntegration = Bun.env.REMOTE_TARGET_SKIP_INTEGRATION === '1'
+const matrixPrerequisitesAvailable = !skipIntegration && await (async () => {
   const [dockerAvailable, sshAvailable] = await Promise.all([
     isCommandAvailable(['docker', 'info']),
     isCommandAvailable(['ssh', '-V']),
@@ -228,7 +201,7 @@ const matrixPrerequisitesAvailable = await (async () => {
   return dockerAvailable && sshAvailable
 })()
 const matrixDescribe = matrixPrerequisitesAvailable ? describe : describe.skip
-if (!matrixPrerequisitesAvailable && Bun.env.REMOTE_TARGET_SKIP_INTEGRATION !== '1') {
+if (!matrixPrerequisitesAvailable && !skipIntegration) {
   throw new Error('Docker and SSH are required for integration tests.')
 }
 const getBaseSetupStep = (baseCase: BaseCase) => {
@@ -288,17 +261,32 @@ const createBaseContext = async (baseCase: BaseCase): Promise<BaseContext> => {
   await fs.mkdir(matrixRootFolder, {recursive: true})
   const folder = await fs.mkdtemp(path.join(matrixRootFolder, `${toDockerSlug(baseCase.id)}-`))
   const privateKeyFile = path.join(folder, 'id_ed25519')
-  const keyComment = `remote-target-test-${toDockerSlug(baseCase.id)}`
-  const {privateKey, publicKey} = await makeSshKeys()
-  const authorizedKey = await toOpenSshPublicKey(publicKey, keyComment)
-  await Promise.all([
-    Bun.write(privateKeyFile, ensureTrailingNewline(privateKey)),
-    Bun.write(`${privateKeyFile}.pub`, ensureTrailingNewline(authorizedKey)),
-  ])
-  return {
-    authorizedKey,
-    folder,
-    privateKeyFile,
+  try {
+    if (process.platform !== 'win32') {
+      await fs.chmod(folder, 0o700)
+    }
+    const {privateKey, publicKey} = await makeSshKeys({comment: `remote-target-test-${toDockerSlug(baseCase.id)}`})
+    await Promise.all([
+      fs.writeFile(privateKeyFile, `${privateKey.trimEnd()}\n`),
+      fs.writeFile(`${privateKeyFile}.pub`, `${publicKey.trimEnd()}\n`),
+    ])
+    if (process.platform !== 'win32') {
+      await Promise.all([
+        fs.chmod(privateKeyFile, 0o600),
+        fs.chmod(`${privateKeyFile}.pub`, 0o644),
+      ])
+    }
+    return {
+      authorizedKey: publicKey.trim(),
+      folder,
+      privateKeyFile,
+    }
+  } catch (error) {
+    await fs.rm(folder, {
+      force: true,
+      recursive: true,
+    })
+    throw error
   }
 }
 const renderDockerfile = (baseCase: BaseCase, runtimeCase: RuntimeCase, authorizedKey: string) => {
@@ -319,7 +307,10 @@ const inspectPublishedSshPort = async (containerName: string) => {
   let lastStdout: string | undefined
   let lastStderr: string | undefined
   while (Date.now() < deadline) {
-    const result = await runProcess(['docker', 'port', containerName, '22/tcp'])
+    const result = await runProcess(['docker', 'port', containerName, '22/tcp'], {
+      timeoutMs: Math.min(5000, Math.max(0, deadline - Date.now())),
+      maxOutputBytes: 64_000,
+    })
     lastStdout = result.stdout
     lastStderr = result.stderr
     const match = /:(?<port>\d+)\s*$/u.exec(result.stdout ?? '')
@@ -332,57 +323,70 @@ const inspectPublishedSshPort = async (containerName: string) => {
   throw new Error(`Expected a valid published SSH port for ${containerName}, got stdout ${JSON.stringify(lastStdout)} and stderr ${JSON.stringify(lastStderr)}.`)
 }
 const getDockerLogs = async (containerName: string) => {
-  const result = await runProcess(['docker', 'logs', containerName])
+  const result = await runProcess(['docker', 'logs', '--tail', '200', containerName], {
+    timeoutMs: 5000,
+    maxOutputBytes: 64_000,
+  })
   return [result.stdout, result.stderr].filter(Boolean).join('\n')
 }
-const waitForSsh = async (knownHostsFile: string, privateKeyFile: string, hostPort: number, containerName: string) => {
-  const deadline = Date.now() + 120_000
+const waitForSsh = async (knownHostsFile: string, sshConfigFile: string, privateKeyFile: string, hostPort: number, containerName: string) => {
+  const deadline = Date.now() + 90_000
+  const transport = new SshTargetTransport({
+    host: '127.0.0.1',
+    user: 'root',
+    port: hostPort,
+    keyFile: privateKeyFile,
+    knownHostsFile,
+    sshConfigFile,
+    sshShell: 'posix',
+    sshOptions: ['ConnectTimeout=2', 'StrictHostKeyChecking=accept-new', 'IdentitiesOnly=yes', 'LogLevel=ERROR'],
+  })
   let lastResult: Awaited<ReturnType<typeof runProcess>> | undefined
   while (Date.now() < deadline) {
-    lastResult = await runProcess([
-      'ssh',
-      '-T',
-      '-o',
-      'BatchMode=yes',
-      '-o',
-      'ConnectTimeout=2',
-      '-o',
-      'StrictHostKeyChecking=accept-new',
-      '-o',
-      `UserKnownHostsFile=${knownHostsFile}`,
-      '-i',
-      privateKeyFile,
-      '-p',
-      String(hostPort),
-      'root@127.0.0.1',
-      'printf ready',
-    ])
+    lastResult = await transport.runShellNeutralCommand(['sh', '-c', 'printf ready'], {
+      timeoutMs: Math.min(5000, Math.max(0, deadline - Date.now())),
+      maxOutputBytes: 64_000,
+    })
     if (lastResult.exitCode === 0 && lastResult.stdout?.trim() === 'ready') {
       return
     }
-    await Bun.sleep(1000)
+    await Bun.sleep(500)
   }
-  const dockerLogs = await getDockerLogs(containerName)
-  throw new Error(`The SSH server in ${containerName} did not become ready in time.\n--- stdout ---\n${tail(lastResult?.stdout)}\n--- stderr ---\n${tail(lastResult?.stderr)}\n--- docker logs ---\n${tail(dockerLogs, 8000)}`)
+  const logs = await getDockerLogs(containerName)
+  throw new Error(`SSH readiness failed.\n${tail(lastResult?.stderr)}\n${tail(logs)}`)
 }
-const destroyRuntimeContext = async (runtimeContext: RuntimeContext | undefined) => {
-  if (!runtimeContext) {
+const destroyRuntimeContext = async (context: Partial<RuntimeContext> | undefined) => {
+  if (!context) {
     return
   }
-  await Promise.allSettled([
-    runProcess(['docker', 'rm', '--force', runtimeContext.containerName]),
-    fs.rm(runtimeContext.runtimeWorkFolder, {
+  if (context.containerName) {
+    await runProcess(['docker', 'rm', '--force', context.containerName], {
+      timeoutMs: 20_000,
+      maxOutputBytes: 64_000,
+    })
+  }
+  if (context.imageTag) {
+    await runProcess(['docker', 'image', 'rm', context.imageTag], {
+      timeoutMs: 20_000,
+      maxOutputBytes: 64_000,
+    })
+  }
+  if (context.runtimeWorkFolder) {
+    await fs.rm(context.runtimeWorkFolder, {
       force: true,
       recursive: true,
-    }),
-  ])
+    })
+  }
 }
 const createRuntimeContext = async (baseCase: BaseCase, runtimeCase: RuntimeCase, baseContext: BaseContext): Promise<RuntimeContext> => {
   const runtimeWorkFolder = await fs.mkdtemp(path.join(baseContext.folder, `${runtimeCase.id}-`))
   const imageTag = `remote-target-matrix:${toDockerSlug(`${baseCase.baseImage}-${baseCase.baseImageVersion}-${runtimeCase.id}-${runtimeCase.version}`)}`
+  const ownedImageTag = `${imageTag}-${crypto.randomUUID()}`
   const containerName = `${toDockerSlug(`${baseCase.baseImage}-${baseCase.baseImageVersion}-${runtimeCase.id}`)}-${crypto.randomUUID().slice(0, 8)}`
   const dockerfileFile = path.join(runtimeWorkFolder, 'Dockerfile')
   const knownHostsFile = path.join(runtimeWorkFolder, 'known_hosts')
+  const sshConfigFile = path.join(runtimeWorkFolder, 'ssh_config')
+  await fs.writeFile(sshConfigFile, '')
   const dockerfileContent = renderDockerfile(baseCase, runtimeCase, baseContext.authorizedKey)
   const runtimeContextDraft = {
     baseContext,
@@ -391,22 +395,27 @@ const createRuntimeContext = async (baseCase: BaseCase, runtimeCase: RuntimeCase
     discovery: undefined,
     dockerfileFile,
     hostPort: 0,
-    imageTag,
+    imageTag: ownedImageTag,
     knownHostsFile,
+    sshConfigFile,
     remoteTarget: undefined,
     runtimeInfo: undefined,
     runtimeWorkFolder,
   } as Partial<RuntimeContext>
   try {
     await Bun.write(dockerfileFile, dockerfileContent)
-    await ensureCommandSucceeded(['docker', 'build', '--tag', imageTag, '--file', dockerfileFile, runtimeWorkFolder], `Building the Docker image for ${baseCase.id} with ${runtimeCase.id}`)
-    const runResult = await ensureCommandSucceeded(['docker', 'run', '--detach', '--publish', '127.0.0.1::22', '--name', containerName, imageTag], `Starting the Docker container for ${baseCase.id} with ${runtimeCase.id}`)
+    await ensureCommandSucceeded(['docker', 'build', '--tag', ownedImageTag, '--file', dockerfileFile, runtimeWorkFolder], `Building the Docker image for ${baseCase.id} with ${runtimeCase.id}`, buildTimeoutMs - 300_000)
+    const runResult = await ensureCommandSucceeded(['docker', 'run', '--detach', '--publish', '127.0.0.1::22', '--name', containerName, ownedImageTag], `Starting the Docker container for ${baseCase.id} with ${runtimeCase.id}`)
     runtimeContextDraft.containerId = runResult.stdout?.trim() || containerName
     runtimeContextDraft.hostPort = await inspectPublishedSshPort(containerName)
-    await waitForSsh(knownHostsFile, baseContext.privateKeyFile, runtimeContextDraft.hostPort, containerName)
+    await waitForSsh(knownHostsFile, sshConfigFile, baseContext.privateKeyFile, runtimeContextDraft.hostPort, containerName)
     const remoteTarget = new RemoteTarget({
       host: '127.0.0.1',
-      keyFile: normalizePath(baseContext.privateKeyFile),
+      keyFile: path.enforceForwardSlashes(baseContext.privateKeyFile),
+      knownHostsFile,
+      sshConfigFile,
+      sshShell: 'posix',
+      sshOptions: ['StrictHostKeyChecking=yes', 'IdentitiesOnly=yes', 'LogLevel=ERROR'],
       port: runtimeContextDraft.hostPort,
       runtimeCandidates: [runtimeCase.id],
       user: 'root',
@@ -417,7 +426,7 @@ const createRuntimeContext = async (baseCase: BaseCase, runtimeCase: RuntimeCase
     runtimeContextDraft.runtimeInfo = remoteTarget.getRuntime()
     return runtimeContextDraft as RuntimeContext
   } catch (error) {
-    await destroyRuntimeContext(runtimeContextDraft as RuntimeContext)
+    await destroyRuntimeContext(runtimeContextDraft)
     throw error
   }
 }
@@ -466,7 +475,7 @@ for (const baseCase of baseCases) {
           expect(discoveredRuntime.name).toBe(runtimeCase.id)
           expect(discoveredRuntime.file).toContain(`/${runtimeCase.id}`)
           expect(discoveredRuntime.version).toContain(runtimeCase.version)
-          expect(runtimeContext.discovery.shell.name).toBe('bash')
+          expect(runtimeContext.discovery.shell.name).toBe('sh')
           expect(resolvedRuntime.name).toBe(runtimeCase.id)
           expect(resolvedRuntime.file).toContain(`/${runtimeCase.id}`)
           expect(resolvedRuntime.version).toContain(runtimeCase.version)

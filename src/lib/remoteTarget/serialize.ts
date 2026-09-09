@@ -14,11 +14,11 @@ const getEnvelope = (value: unknown) => {
   if (!value || typeof value !== 'object' || !Object.hasOwn(value, transportEnvelopeKey)) {
     return
   }
-  const envelope = (value as TransportEnvelope)[transportEnvelopeKey]
-  if (typeof envelope !== 'object' || envelope.version !== transportEnvelopeVersion || typeof envelope.type !== 'string') {
+  const envelope = (value as Record<string, unknown>)[transportEnvelopeKey]
+  if (!envelope || typeof envelope !== 'object' || !('version' in envelope) || envelope.version !== transportEnvelopeVersion || !('type' in envelope) || typeof envelope.type !== 'string') {
     throw new TypeError('Malformed remote-target transport envelope.')
   }
-  return envelope
+  return envelope as TransportEnvelope[typeof transportEnvelopeKey]
 }
 
 // Keep this as a function declaration. RemoteTarget stringifies it into wrapper scripts and may rebind it under another name, so recursive calls must stay self-contained.
@@ -39,6 +39,12 @@ export function serializeTransportValue(value: unknown, seen = new WeakSet<objec
     return wrap('undefined')
   }
   if (typeof value === 'number') {
+    if (Object.is(value, -0)) {
+      return wrap('negativeZero')
+    }
+    if (Object.is(value, -0)) {
+      return wrap('negativeZero')
+    }
     if (Number.isNaN(value)) {
       return wrap('nan')
     }
@@ -88,6 +94,12 @@ export function serializeTransportValue(value: unknown, seen = new WeakSet<objec
     if (value instanceof URL) {
       return wrap('url', value.toString())
     }
+    if (Buffer.isBuffer(value)) {
+      return wrap('buffer', value.toString('base64'))
+    }
+    if (Buffer.isBuffer(value)) {
+      return wrap('buffer', value.toString('base64'))
+    }
     if (value instanceof ArrayBuffer) {
       return wrap('arrayBuffer', Buffer.from(value).toString('base64'))
     }
@@ -95,7 +107,7 @@ export function serializeTransportValue(value: unknown, seen = new WeakSet<objec
       return wrap('dataView', Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('base64'))
     }
     if (ArrayBuffer.isView(value)) {
-      const supportedNames = new Set(['BigInt64Array', 'BigUint64Array', 'Float32Array', 'Float64Array', 'Int16Array', 'Int32Array', 'Int8Array', 'Uint16Array', 'Uint32Array', 'Uint8Array', 'Uint8ClampedArray'])
+      const supportedNames = new Set(['BigInt64Array', 'BigUint64Array', 'Float16Array', 'Float16Array', 'Float32Array', 'Float64Array', 'Int16Array', 'Int32Array', 'Int8Array', 'Uint16Array', 'Uint32Array', 'Uint8Array', 'Uint8ClampedArray'])
       const name = value.constructor.name
       if (!supportedNames.has(name)) {
         throw new TypeError(`Unsupported typed array: ${name}.`)
@@ -103,7 +115,9 @@ export function serializeTransportValue(value: unknown, seen = new WeakSet<objec
       return wrap('typedArray', Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('base64'), name)
     }
     if (Array.isArray(value)) {
-      return wrap('array', value.map(item => serializeTransportValue(item, seen)))
+      return wrap('array', Array.from({length: value.length}, (_, index) => {
+        return Object.hasOwn(value, index) ? serializeTransportValue(value[index], seen) : wrap('hole')
+      }))
     }
     return wrap('object', Object.entries(value).map(([key, item]) => [key, serializeTransportValue(item, seen)]))
   } finally {
@@ -130,6 +144,18 @@ export function deserializeTransportValue(value: unknown): unknown {
   const {data, name, type} = envelope
   if (type === 'undefined') {
     return undefined
+  }
+  if (type === 'negativeZero') {
+    return -0
+  }
+  if (type === 'buffer') {
+    if (typeof data !== 'string') {
+      throw new TypeError('Malformed Buffer transport payload.')
+    }
+    return Buffer.from(data, 'base64')
+  }
+  if (type === 'negativeZero') {
+    return -0
   }
   if (type === 'nan') {
     return Number.NaN
@@ -158,6 +184,9 @@ export function deserializeTransportValue(value: unknown): unknown {
   if (type === 'url') {
     return new URL(String(data))
   }
+  if (type === 'buffer') {
+    return Buffer.from(decodeArrayBuffer(data))
+  }
   if (type === 'arrayBuffer') {
     return decodeArrayBuffer(data)
   }
@@ -168,7 +197,14 @@ export function deserializeTransportValue(value: unknown): unknown {
     if (!Array.isArray(data)) {
       throw new TypeError('Malformed array transport payload.')
     }
-    return data.map(item => deserializeTransportValue(item))
+    const result: Array<unknown> = []
+    result.length = data.length
+    for (const [index, item] of data.entries()) {
+      if (getEnvelope(item)?.type !== 'hole') {
+        result[index] = deserializeTransportValue(item)
+      }
+    }
+    return result
   }
   if (type === 'object') {
     if (!Array.isArray(data) || data.some(entry => !Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string')) {
@@ -229,7 +265,23 @@ export function deserializeTransportValue(value: unknown): unknown {
       Uint8Array,
       Uint8ClampedArray,
     }
-    const Constructor = name ? constructors[name] : undefined
+    if (name === 'Float16Array') {
+      const Float16 = (globalThis as {Float16Array?: TypedArrayConstructor}).Float16Array
+      if (!Float16) {
+        throw new TypeError('Float16Array is not supported by the caller runtime.')
+      }
+      return new Float16(decodeArrayBuffer(data))
+    }
+    const Float16 = (globalThis as unknown as {Float16Array?: TypedArrayConstructor}).Float16Array
+    if (name === 'Float16Array' && !Float16) {
+      throw new TypeError('Float16Array is not supported by the caller.')
+    }
+    let Constructor: TypedArrayConstructor | undefined
+    if (name === 'Float16Array') {
+      Constructor = Float16
+    } else if (name && Object.hasOwn(constructors, name)) {
+      Constructor = constructors[name]
+    }
     if (!Constructor) {
       throw new TypeError(`Unsupported typed array transport payload: ${String(name)}.`)
     }

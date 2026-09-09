@@ -1,321 +1,236 @@
 import type {TargetTransport} from '../transport/base/TargetTransport.ts'
-import type {DiscoveryInfo, LinuxDistribution, OsInfo, RuntimeInfo, RuntimeName, ShellInfo, ShellName} from './types.ts'
+import type {DiscoveryInfo, LinuxDistribution, RuntimeInfo, RuntimeName, ShellInfo, ShellName} from './types.ts'
 
-import {toJavaScriptLiteral} from './toJavaScriptLiteral.ts'
+import {InvocationDeadline} from './InvocationDeadline.ts'
+import {RemoteTargetError} from './RemoteTargetError.ts'
+import {ResultFrame} from './ResultFrame.ts'
+import {runProcess} from './runProcess.ts'
 
-const runtimeVersionArguments: Record<RuntimeName, Array<string>> = {
-  bun: ['--version'],
-  deno: ['--version'],
-  node: ['--version'],
-}
-const isLinuxDistribution = (value: string): value is LinuxDistribution => {
-  return value === 'arch' || value === 'debian' || value === 'nixos' || value === 'unknown'
-}
-const isRuntimeName = (value: string): value is RuntimeName => {
-  return value === 'bun' || value === 'deno' || value === 'node'
-}
-const isShellName = (value: string): value is ShellName => {
-  return value === 'bash' || value === 'fish' || value === 'powershell' || value === 'sh' || value === 'unknown' || value === 'zsh'
-}
-const getFirstLine = (value: string | undefined) => {
-  return value?.split(/\r?\n/u).find(line => line.trim().length > 0)?.trim()
-}
-const normalizeRuntimeVersion = (runtimeName: RuntimeName, value: string | undefined) => {
-  const firstLine = getFirstLine(value)
-  if (!firstLine) {
-    return
+// Embedded remotely; all runtime dependencies and helper state remain inside this function.
+async function collectDiscovery(timeoutMs: number, run: typeof runProcess): Promise<Omit<DiscoveryInfo, 'bootstrapRuntime'>> {
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const os = await import('node:os')
+  const {default: process} = await import('node:process')
+  const deadline = performance.now() + timeoutMs
+  const names: Array<RuntimeName> = ['bun', 'node', 'deno']
+  let current: RuntimeName = 'node'
+  if (typeof Bun === 'object') {
+    current = 'bun'
+  } else if (typeof (globalThis as {Deno?: unknown}).Deno === 'object') {
+    current = 'deno'
   }
-  if (runtimeName === 'deno' && firstLine.startsWith('deno ')) {
-    return firstLine.slice('deno '.length)
-  }
-  return firstLine
-}
-const normalizeOsInfo = (value: unknown): OsInfo => {
-  if (!value || typeof value !== 'object') {
-    return {
-      name: 'unknown',
+  // These helpers must remain inside the function embedded on the target.
+  // eslint-disable-next-line unicorn/consistent-function-scoping
+  const normalizePath = (value: string) => value.replaceAll('\\', '/')
+  // eslint-disable-next-line unicorn/consistent-function-scoping
+  const firstLine = (value: string | undefined) => value?.split(/\r?\n/u).find(line => line.trim())?.trim()
+  const paths = Object.entries(process.env).find(([key]) => key.toLowerCase() === 'path')?.[1]?.split(path.delimiter) ?? []
+  const findExecutable = (name: string) => {
+    if (name === current) {
+      return process.execPath
+    }
+    const suffixes = process.platform === 'win32' ? ['', '.exe', '.com'] : ['']
+    for (const directory of paths) {
+      for (const suffix of suffixes) {
+        const file = path.join(directory.replaceAll(/^"|"$/gu, ''), name + suffix)
+        try {
+          if (!fs.statSync(file).isFile()) {
+            continue
+          }
+          fs.accessSync(file, process.platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK)
+          return file
+        } catch {}
+      }
     }
   }
-  const candidate = value as Record<string, unknown>
-  const release = typeof candidate.release === 'string' && candidate.release.trim().length > 0 ? candidate.release : undefined
-  if (candidate.name === 'linux') {
-    return {
-      distribution: typeof candidate.distribution === 'string' && isLinuxDistribution(candidate.distribution) ? candidate.distribution : 'unknown',
+  const runtimes: Array<RuntimeInfo> = []
+  for (const name of names) {
+    const file = findExecutable(name)
+    if (!file) {
+      continue
+    }
+    const remaining = Math.ceil(deadline - performance.now())
+    if (remaining <= 0) {
+      throw new Error('Discovery timed out.')
+    }
+    const result = await run([file, '--version'], {
+      timeoutMs: Math.min(2000, remaining),
+      maxOutputBytes: 64_000,
+    })
+    if (result.failure && !(result.failure === 'spawn' && result.errorCode === 'ENOENT')) {
+      throw new Error(result.stderr ?? 'Runtime probe failed.')
+    }
+    if (result.exitCode !== 0) {
+      continue
+    }
+    let version = firstLine(result.stdout)
+    if (name === 'deno') {
+      version = version?.startsWith('deno ') ? version.slice(5) : undefined
+    }
+    if (!version || !(name === 'node' ? /^v\d/u : /^\d/u).test(version)) {
+      continue
+    }
+    runtimes.push({
+      file: normalizePath(file),
+      name,
+      version,
+    })
+  }
+  let distribution: LinuxDistribution = 'unknown'
+  if (process.platform === 'linux') {
+    try {
+      const release: Record<string, string | undefined> = Object.fromEntries(fs.readFileSync('/etc/os-release', 'utf8').split(/\r?\n/u).flatMap(line => {
+        const match = /^([A-Z_]+)=(.*)$/u.exec(line)
+        if (!match) {
+          return []
+        }
+        return [[match[1], match[2].replace(/^(["'])(.*)\1$/u, '$2')]]
+      }))
+      const ids = new Set([release.ID, ...release.ID_LIKE?.split(/\s+/u) ?? []])
+      if (ids.has('nixos')) {
+        distribution = 'nixos'
+      } else if (ids.has('arch')) {
+        distribution = 'arch'
+      } else if (ids.has('debian') || ids.has('ubuntu')) {
+        distribution = 'debian'
+      }
+    } catch {}
+  }
+  const shellFile = process.platform === 'win32' ? process.env.ComSpec : process.env.SHELL
+  const basename = path.basename(shellFile ?? '').toLowerCase().replace(/\.exe$/u, '')
+  let shellName: ShellName = 'unknown'
+  if (basename === 'pwsh' || basename === 'powershell') {
+    shellName = 'powershell'
+  } else if (basename === 'cmd' || basename === 'fish' || basename === 'sh' || basename === 'bash' || basename === 'zsh') {
+    shellName = basename
+  }
+  return {
+    os: process.platform === 'linux' ? {
       name: 'linux',
-      ...release ? {release} : {},
-    }
-  }
-  if (candidate.name === 'windows') {
-    return {
-      name: 'windows',
-      ...release ? {release} : {},
-    }
-  }
-  return {
-    name: 'unknown',
-    ...release ? {release} : {},
-  }
-}
-const normalizeRuntimeInfo = (value: unknown): RuntimeInfo | undefined => {
-  if (!value || typeof value !== 'object') {
-    return
-  }
-  const candidate = value as Record<string, unknown>
-  if (typeof candidate.file !== 'string' || typeof candidate.name !== 'string' || !isRuntimeName(candidate.name)) {
-    return
-  }
-  return {
-    file: candidate.file,
-    name: candidate.name,
-    ...typeof candidate.version === 'string' && candidate.version.trim().length > 0 ? {version: candidate.version} : {},
-  }
-}
-const normalizeShellInfo = (value: unknown): ShellInfo => {
-  if (!value || typeof value !== 'object') {
-    return {
-      name: 'unknown',
-    }
-  }
-  const candidate = value as Record<string, unknown>
-  return {
-    ...typeof candidate.file === 'string' && candidate.file.trim().length > 0 ? {file: candidate.file} : {},
-    name: typeof candidate.name === 'string' && isShellName(candidate.name) ? candidate.name : 'unknown',
-  }
-}
-const normalizeRuntimeList = (value: unknown) => {
-  return Array.isArray(value) ? value.map(item => normalizeRuntimeInfo(item)).filter((item): item is RuntimeInfo => item !== undefined) : []
-}
-const emptyDiscoveryInfo = (): DiscoveryInfo => {
-  return {
-    os: {
-      name: 'unknown',
+      distribution,
+      release: os.release(),
+    } : {
+      name: process.platform === 'win32' ? 'windows' : 'unknown',
+      release: os.release(),
     },
-    runtimes: [],
+    runtimes,
     shell: {
-      name: 'unknown',
+      name: shellName,
+      ...shellFile ? {file: normalizePath(shellFile)} : {},
     },
   }
 }
-const discoveryScript = (runtimeCandidates: Array<RuntimeName>) => String.raw`
-import fs from 'fs-extra'
-import os from 'node:os'
-import process from 'node:process'
-import {spawnSync} from 'node:child_process'
-
-const runtimeCandidates = ${toJavaScriptLiteral(runtimeCandidates)}
-const currentRuntimeName = typeof Bun === 'object'
-  ? 'bun'
-  : typeof Deno === 'object'
-    ? 'deno'
-    : 'node'
-const normalizePath = value => String(value).replaceAll('\\', '/')
-const run = (command, args = []) => {
-  try {
-    const result = spawnSync(command, args, {encoding: 'utf8'})
-    return {
-      exitCode: result.status ?? 1,
-      stderr: result.stderr ?? '',
-      stdout: result.stdout ?? '',
-    }
-  } catch (error) {
-    return {
-      exitCode: 1,
-      stderr: String(error),
-      stdout: '',
-    }
-  }
-}
-const getFirstLine = value => value.split(/\r?\n/u).find(line => line.trim().length > 0)?.trim()
-const getShellName = value => {
-  const basename = normalizePath(value).split('/').at(-1)?.toLowerCase() ?? ''
-  if (basename.includes('pwsh') || basename.includes('powershell')) {
-    return 'powershell'
-  }
-  if (basename.includes('fish')) {
-    return 'fish'
-  }
-  if (basename.includes('zsh')) {
-    return 'zsh'
-  }
-  if (basename.includes('bash')) {
-    return 'bash'
-  }
-  if (basename.endsWith('sh')) {
-    return 'sh'
-  }
-  return 'unknown'
-}
-const getLinuxDistribution = () => {
-  try {
-    const osRelease = readFileSync('/etc/os-release', 'utf8')
-    if (/\bID=nixos\b/u.test(osRelease)) {
-      return 'nixos'
-    }
-    if (/\bID=arch\b/u.test(osRelease) || /\bID_LIKE=.*\barch\b/u.test(osRelease)) {
-      return 'arch'
-    }
-    if (/\bID=ubuntu\b/u.test(osRelease) || /\bID=debian\b/u.test(osRelease) || /\bID_LIKE=.*\bdebian\b/u.test(osRelease)) {
-      return 'debian'
-    }
-  } catch {}
-  return 'unknown'
-}
-const findExecutable = name => {
-  if (name === currentRuntimeName && typeof process.execPath === 'string' && process.execPath.length > 0) {
-    return normalizePath(process.execPath)
-  }
-  const command = process.platform === 'win32' ? 'where.exe' : 'which'
-  const result = run(command, [name])
-  if (result.exitCode === 0) {
-    const firstLine = getFirstLine(result.stdout)
-    if (firstLine) {
-      return normalizePath(firstLine)
-    }
-  }
-}
-const getRuntimeVersion = (name, file) => {
-  const result = run(file, ['--version'])
-  if (result.exitCode !== 0) {
-    return undefined
-  }
-  const firstLine = getFirstLine(result.stdout)
-  if (!firstLine) {
-    return undefined
-  }
-  if (name === 'deno') {
-    return firstLine.startsWith('deno ') ? firstLine.slice('deno '.length) : undefined
-  }
-  if (name === 'node') {
-    return /^v\d/u.test(firstLine) ? firstLine : undefined
-  }
-  return /^\d/u.test(firstLine) ? firstLine : undefined
-}
-const shellFile = process.platform === 'win32'
-  ? findExecutable('pwsh.exe') || findExecutable('powershell.exe') || process.env.ComSpec || ''
-  : process.env.SHELL || getFirstLine(run('ps', ['-p', String(process.ppid), '-o', 'comm=']).stdout) || ''
-const shell = {
-  ...(shellFile ? {file: normalizePath(shellFile)} : {}),
-  name: process.platform === 'win32' && process.env.PSModulePath ? 'powershell' : getShellName(shellFile),
-}
-const osInfo = process.platform === 'linux'
-  ? {distribution: getLinuxDistribution(), name: 'linux', release: os.release()}
-  : process.platform === 'win32'
-    ? {name: 'windows', release: os.release()}
-    : {name: 'unknown', release: os.release()}
-const runtimes = runtimeCandidates.flatMap(name => {
-  const file = findExecutable(name)
-  if (!file) {
-    return []
-  }
-  const version = getRuntimeVersion(name, file)
-  if (!version) {
-    return []
-  }
-  return [{file, name, version}]
-})
-console.log(JSON.stringify({os: osInfo, runtimes, shell}))
-`
 
 export const getRuntimeCommand = (runtime: RuntimeInfo | RuntimeName) => {
-  const runtimeName = typeof runtime === 'string' ? runtime : runtime.name
+  const name = typeof runtime === 'string' ? runtime : runtime.name
   const file = typeof runtime === 'string' ? runtime : runtime.file
-  if (runtimeName === 'bun') {
+  if (name === 'bun') {
     return [file, '-']
   }
-  if (runtimeName === 'deno') {
+  if (name === 'deno') {
     return [file, 'run', '-A', '-']
   }
   return [file, '--input-type=module', '-']
 }
 
-export const discoverTarget = async (transport: TargetTransport, bootstrapRuntime: RuntimeInfo): Promise<DiscoveryInfo> => {
-  const result = await transport.runShellNeutralCommand(getRuntimeCommand(bootstrapRuntime), {
-    stdin: discoveryScript(['bun', 'node', 'deno']),
-  })
-  if (result.exitCode !== 0 || !result.stdout) {
-    throw new Error(`Failed to discover target details using ${bootstrapRuntime.name}.`)
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
+const isDiscoveryInfo = (value: {os?: unknown
+  runtimes?: unknown
+  shell?: unknown}): value is Omit<DiscoveryInfo, 'bootstrapRuntime'> => {
+  if (!isRecord(value.os) || !isRecord(value.shell) || !Array.isArray(value.runtimes)) {
+    return false
   }
-  const rawResult = JSON.parse(result.stdout) as {
+  const {os, shell, runtimes} = value
+  if (!['linux', 'windows', 'unknown'].includes(String(os.name)) || os.release !== undefined && typeof os.release !== 'string') {
+    return false
+  }
+  if (os.name === 'linux' && !['arch', 'debian', 'nixos', 'unknown'].includes(String(os.distribution))) {
+    return false
+  }
+  if (!['bash', 'cmd', 'fish', 'powershell', 'sh', 'unknown', 'zsh'].includes(String(shell.name)) || shell.file !== undefined && typeof shell.file !== 'string') {
+    return false
+  }
+  return runtimes.every((runtime: unknown) => isRecord(runtime) && typeof runtime.file === 'string' && ['bun', 'node', 'deno'].includes(String(runtime.name)) && (runtime.version === undefined || typeof runtime.version === 'string'))
+}
+
+export const discoverTarget = async (transport: TargetTransport, bootstrapRuntime: RuntimeInfo, deadline = new InvocationDeadline({timeoutMs: 30_000})): Promise<DiscoveryInfo> => {
+  const frame = new ResultFrame(65_536)
+  const result = await transport.runShellNeutralCommand(getRuntimeCommand(bootstrapRuntime), {
+    ...deadline.options(),
+    frame: frame.options(),
+    maxOutputBytes: 65_536,
+    requireStdinDelivery: true,
+    stdin: `const run = ${runProcess.toString()}
+const collect = ${collectDiscovery.toString()}
+console.log(${JSON.stringify(frame.marker)} + JSON.stringify({ok: true, ...await collect(${deadline.remaining() ?? 30_000}, run)}))`,
+  })
+  const raw = frame.read<{ok: boolean
     os?: unknown
     runtimes?: unknown
-    shell?: unknown
+    shell?: unknown}>(result, `Failed to discover target details using ${bootstrapRuntime.name}.`)
+  if (!isDiscoveryInfo(raw)) {
+    throw new RemoteTargetError('Invalid discovery payload.', result)
+  }
+  const runtimes = raw.runtimes
+  return {
+    bootstrapRuntime: runtimes.find(runtime => runtime.name === bootstrapRuntime.name) ?? bootstrapRuntime,
+    os: raw.os,
+    runtimes,
+    shell: transport.getShell() ?? raw.shell,
+  }
+}
+
+const probe = async (transport: TargetTransport, command: Array<string>, deadline: InvocationDeadline) => {
+  const result = await transport.runShellNeutralCommand(command, {
+    ...deadline.options(),
+    maxOutputBytes: 65_536,
+  })
+  if (result.failure && !(result.failure === 'spawn' && result.errorCode === 'ENOENT') || result.exitCode === 255 || result.exitCode === 124) {
+    throw new RemoteTargetError('Transport failed during runtime discovery.', result)
+  }
+  return result
+}
+
+export const discoverWithoutRuntime = async (transport: TargetTransport, deadline = new InvocationDeadline({timeoutMs: 30_000})): Promise<DiscoveryInfo> => {
+  const linux = await probe(transport, ['uname', '-s'], deadline)
+  if (linux.exitCode === 0 && linux.stdout?.trim().toLowerCase() === 'linux') {
+    return {
+      os: {
+        name: 'linux',
+        distribution: 'unknown',
+      },
+      runtimes: [],
+      shell: transport.getShell() ?? {name: 'unknown'},
+    }
+  }
+  const shell = transport.getShell()
+  if (shell?.name === 'powershell' || shell?.name === 'cmd') {
+    return {
+      os: {name: 'windows'},
+      runtimes: [],
+      shell,
+    }
   }
   return {
-    bootstrapRuntime,
-    os: normalizeOsInfo(rawResult.os),
-    runtimes: normalizeRuntimeList(rawResult.runtimes),
-    shell: normalizeShellInfo(rawResult.shell),
+    os: {name: 'unknown'},
+    runtimes: [],
+    shell: transport.getShell() ?? {name: 'unknown'},
   }
 }
 
-export const discoverWithoutRuntime = async (transport: TargetTransport): Promise<DiscoveryInfo> => {
-  const linuxProbe = await transport.runShellNeutralCommand(['uname', '-s']).catch(() => {})
-  if (linuxProbe?.exitCode === 0 && linuxProbe.stdout?.trim().toLowerCase() === 'linux') {
-    const envProbe = await transport.runShellNeutralCommand(['env']).catch(() => {})
-    const shellLine = envProbe?.stdout?.split(/\r?\n/u).find((line: string) => line.startsWith('SHELL='))
-    const shellFile = shellLine?.slice('SHELL='.length)
-    let shellName: ShellName = 'unknown'
-    if (shellFile?.includes('fish')) {
-      shellName = 'fish'
-    } else if (shellFile?.includes('zsh')) {
-      shellName = 'zsh'
-    } else if (shellFile?.includes('bash')) {
-      shellName = 'bash'
-    } else if (shellFile?.split('/').at(-1)?.endsWith('sh')) {
-      shellName = 'sh'
-    }
-    return {
-      os: {
-        distribution: 'unknown',
-        name: 'linux',
-      },
-      runtimes: [],
-      shell: {
-        ...shellFile ? {file: shellFile} : {},
-        name: shellName,
-      },
-    }
-  }
-  const powershellProbes = ['pwsh.exe', 'powershell.exe']
-  const powershellProbe = await Promise.any(powershellProbes.map(async file => {
-    const result = await transport.runShellNeutralCommand([file, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()'])
-    if (result.exitCode !== 0) {
-      throw new Error('PowerShell probe failed.')
-    }
-    return {
-      file,
-      result,
-    }
-  })).catch(() => {})
-  if (powershellProbe) {
-    return {
-      os: {
-        name: 'windows',
-      },
-      runtimes: [],
-      shell: {
-        file: powershellProbe.file,
-        name: 'powershell',
-      },
-    }
-  }
-  return emptyDiscoveryInfo()
-}
-
-export const probeBootstrapRuntime = async (transport: TargetTransport, runtimeNames: Array<RuntimeName> = ['bun', 'node', 'deno']) => {
-  for (const runtimeName of runtimeNames) {
-    const versionProbe = await transport.runShellNeutralCommand([runtimeName, ...runtimeVersionArguments[runtimeName]]).catch(() => {})
-    if (versionProbe?.exitCode !== 0) {
+export const probeBootstrapRuntime = async (transport: TargetTransport, runtimeNames: Array<RuntimeName> = ['bun', 'node', 'deno'], deadline = new InvocationDeadline({timeoutMs: 30_000})): Promise<DiscoveryInfo | undefined> => {
+  for (const name of runtimeNames) {
+    const version = await probe(transport, [name, '--version'], deadline)
+    if (version.exitCode !== 0) {
       continue
     }
-    const provisionalRuntimeInfo = {
-      file: runtimeName,
-      name: runtimeName,
-      ...normalizeRuntimeVersion(runtimeName, versionProbe.stdout) ? {version: normalizeRuntimeVersion(runtimeName, versionProbe.stdout)} : {},
-    } satisfies RuntimeInfo
-    try {
-      const discovery = await discoverTarget(transport, provisionalRuntimeInfo)
-      return discovery.runtimes.find(runtime => runtime.name === runtimeName) ?? provisionalRuntimeInfo
-    } catch {}
+    const runtime: RuntimeInfo = {
+      file: name,
+      name,
+      version: name === 'deno' ? version.stdout?.trim().split(/\r?\n/u)[0]?.replace(/^deno /u, '') : version.stdout?.trim().split(/\r?\n/u)[0],
+    }
+    // A runtime that starts but cannot execute discovery is not an absent runtime.
+    return discoverTarget(transport, runtime, deadline)
   }
 }
