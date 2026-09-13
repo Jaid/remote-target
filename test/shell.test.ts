@@ -21,9 +21,6 @@ class ShellTransport extends SshTargetTransport {
   getArgv() {
     return this.getSshBaseCommand()
   }
-  override runShellCommand(command: string, options?: TransportCommandOptions) {
-    return runProcess([...this.prefix, command], options)
-  }
   override async runShellNeutralCommand(command: Array<string>, options?: TransportCommandOptions): Promise<InvocationResult> {
     if (this.noRuntime && ['bun', 'node', 'deno'].includes(command[0]) && command[1] === '--version') {
       return {
@@ -33,6 +30,9 @@ class ShellTransport extends SshTargetTransport {
       }
     }
     return super.runShellNeutralCommand(command, options)
+  }
+  protected override runSsh(command: string, options: TransportCommandOptions) {
+    return runProcess([...this.prefix, command], options)
   }
 }
 class VisibleSsh extends SshTargetTransport {
@@ -122,8 +122,7 @@ for (const shell of shells) {
   test.skipIf(!available)(`${shell.name}: no-runtime exec uses the actual shell encoder`, async () => {
     const transport = new ShellTransport(shell.prefix)
     transport.noRuntime = true
-    const target = new RemoteTarget('fixture')
-    Object.defineProperty(target, 'transport', {value: transport})
+    const target = new RemoteTarget('fixture', {transport})
     const result = await target.exec([process.execPath, '--eval', 'console.log(JSON.stringify(Bun.argv.slice(1)))', '', 'two words', "a'b", '\u2019'], {timeoutMs: 10_000})
     expect(result.exitCode).toBe(0)
     expect(JSON.parse(result.stdout!)).toEqual(['', 'two words', "a'b", '\u2019'])

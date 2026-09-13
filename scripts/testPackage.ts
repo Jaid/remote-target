@@ -36,7 +36,7 @@ try {
   run(['bun', 'add', '--linker', 'isolated', path.join(folder, `${packageMetadata.name}-${packageMetadata.version}.tgz`)], consumer)
   const smoke = [
     "import assert from 'node:assert/strict'",
-    "import RemoteTarget from 'remote-target'",
+    "import RemoteTarget, {LocalTargetTransport} from 'remote-target'",
     "const local = new RemoteTarget('local')",
     'const run = await local.run(\'import {Buffer} from "node:buffer"; return {buffer: Buffer.from("hello"), zero: -0, sparse: Array(2), map: new Map([[1, new Set([2])]])}\', {maxOutputBytes: 0})',
     'assert.equal(run.returnValue.buffer.toString(), "hello")',
@@ -44,25 +44,36 @@ try {
     'assert.equal(0 in run.returnValue.sparse, false)',
     'assert.deepEqual(run.returnValue.map, new Map([[1, new Set([2])]]))',
     'assert.equal(run.stdout, undefined)',
-    'const loopback = new RemoteTarget("loopback")',
-    'Object.defineProperty(loopback, "transport", {value: local.transport})',
+    'class CustomTransport extends LocalTargetTransport {}',
+    'const transport = new CustomTransport()',
+    'const loopback = new RemoteTarget("loopback", {transport, runtimeCandidates: ["bun"]})',
+    'await loopback.init()',
+    'const streamed = []',
+    'const unsubscribe = transport.on("stdout", event => streamed.push(Buffer.from(event.chunk)))',
     'const exec = await loopback.exec([process.execPath, "--eval", "process.stdin.pipe(process.stdout)"], {stdin: "hello stdin", timeoutMs: 10000})',
+    'unsubscribe()',
     'assert.equal(exec.exitCode, 0)',
     'assert.equal(exec.stdout, "hello stdin")',
+    'assert.equal(Buffer.concat(streamed).toString(), "hello stdin")',
   ].join('\n')
   await fs.writeFile(path.join(consumer, 'smoke.mjs'), smoke)
   run(['bun', path.join(consumer, 'smoke.mjs')], unrelated)
   run(['node', path.join(consumer, 'smoke.mjs')], unrelated)
   const declarations = [
-    "import type {DiscoveryInfo, InvocationResult, RuntimeInfo} from 'remote-target'",
-    "import RemoteTarget, {RemoteTargetError} from 'remote-target'",
-    'const target = new RemoteTarget("local", {sshShell: "posix", initializationTimeoutMs: 30000})',
+    "import type {DiscoveryInfo, InvocationResult, RuntimeInfo, TransportChunkEvent} from 'remote-target'",
+    "import RemoteTarget, {LocalTargetTransport, RemoteTargetError, SshTargetTransport, TargetTransport} from 'remote-target'",
+    'class CustomTransport extends LocalTargetTransport {}',
+    'const transport: TargetTransport = new CustomTransport()',
+    'const target = new RemoteTarget("local", {sshShell: "posix", initializationTimeoutMs: 30000, transport})',
     'await target.init({timeoutMs: 10000})',
     'const discovery: DiscoveryInfo = target.getDiscovery()',
     'const runtime: RuntimeInfo = target.getRuntime()',
     'const invocation: InvocationResult = await target.transport.runShellNeutralCommand([runtime.file, "-"], {stdin: "console.log(42)"})',
+    'const unsubscribe = transport.on("stdout", (event: TransportChunkEvent) => void event.invocationId)',
+    'unsubscribe()',
+    'const sshClass: typeof SshTargetTransport = SshTargetTransport',
     'const error = new RemoteTargetError("failure", invocation)',
-    'void [discovery, runtime, invocation, error.result]',
+    'void [discovery, runtime, invocation, error.result, sshClass]',
   ].join('\n')
   await fs.writeFile(path.join(consumer, 'smoke.ts'), declarations)
   run(['bun', path.join(root, 'node_modules/typescript/bin/tsc'), '--ignoreConfig', '--noEmit', '--module', 'nodenext', '--moduleResolution', 'nodenext', '--target', 'esnext', path.join(consumer, 'smoke.ts')], unrelated)

@@ -18,6 +18,8 @@ It is designed for modern runtimes and modern hosts:
 - discovers the remote OS, login shell and available runtimes
 - executes plain argv-style commands without shell quoting surprises
 - includes a `local` pseudo-target for tests and local tooling
+- accepts caller-supplied transports and supports subclassing the built-in local and SSH transports
+- exposes stdout/stderr chunks through transport events and per-invocation callbacks
 
 ## Install
 
@@ -113,6 +115,66 @@ const result = await RemoteTarget.run('local', () => ({
 }))
 ```
 
+## Custom transports and chunk events
+
+Pass a `TargetTransport` instance through `transport` to replace the built-in local/OpenSSH transport. The instance can inherit directly from the abstract base or from `LocalTargetTransport`/`SshTargetTransport`.
+
+```ts
+import RemoteTarget, {LocalTargetTransport} from 'remote-target'
+
+class InstrumentedLocalTransport extends LocalTargetTransport {
+  // Override built-in behavior when needed.
+}
+
+const transport = new InstrumentedLocalTransport
+const target = new RemoteTarget('custom-target', {
+  transport,
+  runtimeCandidates: ['bun'],
+})
+```
+
+Fully independent transports implement `runShellCommand()` and `runShellNeutralCommand()`. Custom implementations can use the protected `createChunkEmitter(command, options)` helper so transport-level listeners and per-call callbacks receive the same chunks.
+
+```ts
+import type {InvocationResult, TransportCommandOptions} from 'remote-target'
+import {TargetTransport} from 'remote-target'
+
+class MyTransport extends TargetTransport {
+  async runShellCommand(command: string, options: TransportCommandOptions = {}): Promise<InvocationResult> {
+    const chunks = this.createChunkEmitter(command, options)
+    // Feed actual incoming bytes to chunks.stdout(...) / chunks.stderr(...).
+    throw new Error('implementation omitted')
+  }
+
+  async runShellNeutralCommand(command: Array<string>, options: TransportCommandOptions = {}): Promise<InvocationResult> {
+    const chunks = this.createChunkEmitter(command, options)
+    throw new Error('implementation omitted')
+  }
+}
+```
+
+Transport instances expose `stdout` and `stderr` events. Each event includes the incoming `Uint8Array` chunk, a stable `invocationId` for that transport call and the logical command associated with it. `on()` returns an unsubscribe function; `off()` removes a listener explicitly.
+
+```ts
+const unsubscribe = target.transport.on('stdout', event => {
+  console.log(event.invocationId, event.command, Buffer.from(event.chunk).toString())
+})
+
+await target.exec(['tool', '--verbose'])
+unsubscribe()
+```
+
+For one invocation, use `onStdoutChunk` and `onStderrChunk` instead:
+
+```ts
+await target.exec(['tool'], {
+  onStdoutChunk: chunk => process.stdout.write(chunk),
+  onStderrChunk: chunk => process.stderr.write(chunk),
+})
+```
+
+Chunk boundaries are transport/runtime boundaries and are not stable message boundaries. Callbacks receive only user-visible captured output: internal result frames are excluded, and an output limit can truncate the final delivered chunk. Runtime-backed `exec()` forwards child stdout/stderr while the command is running, then returns the same captured output in its final result.
+
 ## SSH configuration
 
 The transport detects the shell that actually interprets SSH commands. Supported modes are POSIX-compatible shells, fish, PowerShell 7.3 or newer, and `cmd.exe` with `pwsh.exe` available on the remote PATH. An explicit `sshShell` skips automatic shell probing; it must match the shell configured in the SSH server, not merely a shell installed on the target.
@@ -165,7 +227,7 @@ A call’s `timeoutMs` covers waiting for initialization, normalization and exec
 
 ## Direct transport integration
 
-The existing `target.transport.runShellNeutralCommand(argv, options)` interface remains available for custom runners such as Mage. Without internal framing options, stdout is returned unchanged: remote-target does not interpret an application’s JSON, base64 output or marker-like text.
+The `target.transport.runShellNeutralCommand(argv, options)` interface remains available for custom runners such as Mage, including when the target was constructed with a caller-supplied transport. Without internal framing options, stdout is returned unchanged: remote-target does not interpret an application’s JSON, base64 output or marker-like text.
 
 ```ts
 const target = new RemoteTarget('container', {runtimeCandidates: ['bun']})

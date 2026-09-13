@@ -6,10 +6,10 @@ import {TargetTransport} from './base/TargetTransport.ts'
 export class LocalTargetTransport extends TargetTransport {
   override runShellCommand(command: string, options: TransportCommandOptions = {}): Promise<InvocationResult> {
     const shell = process.platform === 'win32' ? ['pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-Command'] : ['sh', '-c']
-    return runProcess([...shell, command], options)
+    return runProcess([...shell, command], this.createChunkEmitter(command, options).options)
   }
 
   override runShellNeutralCommand(command: Array<string>, options: TransportCommandOptions = {}): Promise<InvocationResult> {
-    return runProcess(command, options)
+    return runProcess(command, this.createChunkEmitter(command, options).options)
   }
 }

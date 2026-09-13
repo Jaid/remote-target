@@ -8,7 +8,7 @@ import {runProcess} from '../remoteTarget/runProcess.ts'
 import {TargetTransport} from './base/TargetTransport.ts'
 import {encodeShellCommand} from './encodeShellCommand.ts'
 
-type SshTargetTransportInput = Pick<RemoteTargetOptions, 'host' | 'keyFile' | 'knownHostsFile' | 'port' | 'sshConfigFile' | 'sshOptions' | 'sshShell' | 'strictHostKeyChecking' | 'user'>
+export type SshTargetTransportOptions = Pick<RemoteTargetOptions, 'host' | 'keyFile' | 'knownHostsFile' | 'port' | 'sshConfigFile' | 'sshOptions' | 'sshShell' | 'strictHostKeyChecking' | 'user'>
 
 export class SshTargetTransport extends TargetTransport {
   readonly destination: string
@@ -16,11 +16,11 @@ export class SshTargetTransport extends TargetTransport {
   readonly keyFile?: string
   readonly port?: number
   readonly user?: string
-  readonly #options: SshTargetTransportInput
+  readonly #options: SshTargetTransportOptions
   #shell?: SshShell
   #shellPromise?: Promise<SshShell>
 
-  constructor(options: SshTargetTransportInput) {
+  constructor(options: SshTargetTransportOptions) {
     super()
     this.#options = options
     this.destination = options.user ? `${options.user}@${options.host}` : options.host
@@ -61,7 +61,7 @@ export class SshTargetTransport extends TargetTransport {
   }
 
   override runShellCommand(command: string, options: TransportCommandOptions = {}): Promise<InvocationResult> {
-    return this.runSsh(command, options)
+    return this.runSsh(command, this.createChunkEmitter(command, options).options)
   }
 
   override async runShellNeutralCommand(command: Array<string>, options: TransportCommandOptions = {}): Promise<InvocationResult> {
@@ -71,10 +71,10 @@ export class SshTargetTransport extends TargetTransport {
     }
     const shell = this.#shell ?? await deadline.wait(this.resolveShell())
     const source = encodeShellCommand(command, shell)
-    const result = await this.runShellCommand(source, {
+    const result = await this.runSsh(source, this.createChunkEmitter(command, {
       ...options,
       ...deadline.options(),
-    })
+    }).options)
     return {
       ...result,
       duration: deadline.elapsed,

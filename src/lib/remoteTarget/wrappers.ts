@@ -27,11 +27,14 @@ export const buildExecWrapper = (command: Array<string>, marker: string, options
 ${prelude(marker)}
 const runProcess = ${runProcess.toString()}
 try {
-  const result = await runProcess(${toJavaScriptLiteral(command)}, ${toJavaScriptLiteral({
+  const commandOptions = ${toJavaScriptLiteral({
     maxOutputBytes: options.maxOutputBytes,
     stdin: options.stdin,
     timeoutMs: options.timeoutMs,
-  })})
+  })}
+  commandOptions.onStdoutChunk = chunk => process.stdout.write(chunk)
+  commandOptions.onStderrChunk = chunk => process.stderr.write(chunk)
+  const result = await runProcess(${toJavaScriptLiteral(command)}, commandOptions)
   await emit({ok: true, result})
 } catch (error) {
   await reportFailure(error)

@@ -1,3 +1,4 @@
+import type {TargetTransport} from '../transport/base/TargetTransport.ts'
 import type tinyhand from 'tinyhand'
 
 export type SshShell = 'cmd' | 'fish' | 'posix' | 'powershell'
@@ -67,6 +68,7 @@ export type RemoteTargetOptions = {
   sshOptions?: Array<string>
   sshShell?: SshShell
   strictHostKeyChecking?: 'accept-new' | 'yes'
+  transport?: TargetTransport
   user?: string
 }
 
@@ -92,6 +94,8 @@ export type TransportCommandOptions = {
     onFrame: (json: string) => void
   }
   maxOutputBytes?: number
+  onStderrChunk?: (chunk: Uint8Array) => void
+  onStdoutChunk?: (chunk: Uint8Array) => void
   /** Treat an early stdin closure as failed delivery rather than an ordinary unused pipe. */
   requireStdinDelivery?: boolean
   signal?: AbortSignal

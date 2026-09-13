@@ -1,5 +1,4 @@
 import type {DiscoveryInfo, ExecResult, InvocationOptions, RemoteTargetConstructorOptions, RemoteTargetInput, RemoteTargetOptions, RunInput, RunInvocationOptions, RunResult, RuntimeInfo, RuntimeName, SshShell} from './lib/remoteTarget/types.ts'
-import type {TargetTransport} from './lib/transport/base/TargetTransport.ts'
 
 import {enforceForwardSlashes} from 'forward-slash-path'
 import optis from 'optis'
@@ -12,6 +11,7 @@ import {RemoteTargetError} from './lib/remoteTarget/RemoteTargetError.ts'
 import {isInvocationResult, ResultFrame} from './lib/remoteTarget/ResultFrame.ts'
 import {deserializeTransportValue} from './lib/remoteTarget/serialize.ts'
 import {buildExecWrapper, buildRunWrapper} from './lib/remoteTarget/wrappers.ts'
+import {TargetTransport} from './lib/transport/base/TargetTransport.ts'
 import {LocalTargetTransport} from './lib/transport/LocalTargetTransport.ts'
 import {SshTargetTransport} from './lib/transport/SshTargetTransport.ts'
 
@@ -69,6 +69,7 @@ const optionsSchema = optis({
     sshOptions: undefined as Array<string> | undefined,
     sshShell: undefined as SshShell | undefined,
     strictHostKeyChecking: undefined as 'accept-new' | 'yes' | undefined,
+    transport: undefined as TargetTransport | undefined,
     user: undefined as string | undefined,
   },
   required: {host: ''},
@@ -99,7 +100,7 @@ class RemoteTarget {
     if (!Number.isSafeInteger(this.options.initializationTimeoutMs) || this.options.initializationTimeoutMs < 1) {
       throw new RangeError('initializationTimeoutMs must be a positive safe integer.')
     }
-    this.transport = this.options.host === 'local' ? new LocalTargetTransport : new SshTargetTransport(this.options)
+    this.transport = this.options.transport ?? (this.options.host === 'local' ? new LocalTargetTransport : new SshTargetTransport(this.options))
   }
 
   async exec(command: Array<string>, invocationOptions: InvocationOptions = {}): Promise<ExecResult> {
@@ -141,8 +142,9 @@ class RemoteTarget {
       const invocation = await this.transport.runShellNeutralCommand(getRuntimeCommand(runtime), {
         ...deadline.options(),
         frame: frame.options(),
-        // Only bootstrap diagnostics travel outside the result frame for exec().
-        maxOutputBytes: invocationOptions.maxOutputBytes ?? 1_000_000,
+        maxOutputBytes: invocationOptions.maxOutputBytes,
+        onStderrChunk: invocationOptions.onStderrChunk,
+        onStdoutChunk: invocationOptions.onStdoutChunk,
         requireStdinDelivery: true,
         stdin: wrapper,
       })
@@ -216,6 +218,8 @@ class RemoteTarget {
       ...deadline.options(),
       frame: frame.options(),
       maxOutputBytes: invocationOptions.maxOutputBytes,
+      onStderrChunk: invocationOptions.onStderrChunk,
+      onStdoutChunk: invocationOptions.onStdoutChunk,
       requireStdinDelivery: true,
       stdin: wrapper,
     })
@@ -246,5 +250,8 @@ class RemoteTarget {
 
 export default RemoteTarget
 export {RemoteTargetError} from './lib/remoteTarget/RemoteTargetError.ts'
-
+export {LocalTargetTransport, SshTargetTransport, TargetTransport}
 export type * from './lib/remoteTarget/types.ts'
+export type {TransportChunkEvent, TransportChunkListener, TransportChunkStream, TransportCommand} from './lib/transport/base/TargetTransport.ts'
+
+export type {SshTargetTransportOptions} from './lib/transport/SshTargetTransport.ts'

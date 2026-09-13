@@ -61,7 +61,7 @@ export async function runProcess(command: Array<string>, options: TransportComma
       if (pending.length > 0) {
         // The lifecycle callbacks are installed only after all helpers are initialized.
         // eslint-disable-next-line typescript/no-use-before-define
-        capture(stdoutChunks, pending)
+        capture(stdoutChunks, pending, options.onStdoutChunk)
         pending = Buffer.alloc(0)
       }
       if (inFrame && !frameFailed) {
@@ -117,15 +117,16 @@ export async function runProcess(command: Array<string>, options: TransportComma
       aborted = true
       terminate(1)
     }
-    function capture(target: Array<Buffer>, chunk: Buffer) {
+    function capture(target: Array<Buffer>, chunk: Buffer, onChunk?: (chunk: Uint8Array) => void) {
       if (settled) {
         return
       }
       const remaining = options.maxOutputBytes === undefined ? chunk.length : Math.max(0, options.maxOutputBytes - outputBytes)
       if (remaining > 0) {
-        const captured = chunk.subarray(0, remaining)
+        const captured = Buffer.from(chunk.subarray(0, remaining))
         target.push(captured)
         outputBytes += captured.length
+        onChunk?.(captured)
       }
       if (chunk.length > remaining) {
         terminate(1, `Output exceeded the ${options.maxOutputBytes}-byte limit.`, 'output-limit')
@@ -150,7 +151,7 @@ export async function runProcess(command: Array<string>, options: TransportComma
     }
     const captureStdout = (chunk: Buffer) => {
       if (!frame || !marker) {
-        capture(stdoutChunks, chunk)
+        capture(stdoutChunks, chunk, options.onStdoutChunk)
         return
       }
       let data = pending.length > 0 ? Buffer.concat([pending, chunk]) : chunk
@@ -172,7 +173,7 @@ export async function runProcess(command: Array<string>, options: TransportComma
         }
         const start = data.indexOf(marker)
         if (start !== -1) {
-          capture(stdoutChunks, data.subarray(0, start))
+          capture(stdoutChunks, data.subarray(0, start), options.onStdoutChunk)
           if (frameSeen) {
             failFrame('Duplicate result frame.')
           }
@@ -187,7 +188,7 @@ export async function runProcess(command: Array<string>, options: TransportComma
         while (retained > 0 && !data.subarray(data.length - retained).equals(marker.subarray(0, retained))) {
           retained -= 1
         }
-        capture(stdoutChunks, data.subarray(0, data.length - retained))
+        capture(stdoutChunks, data.subarray(0, data.length - retained), options.onStdoutChunk)
         pending = retained === 0 ? Buffer.alloc(0) : Buffer.from(data.subarray(data.length - retained))
         return
       }
@@ -207,7 +208,7 @@ export async function runProcess(command: Array<string>, options: TransportComma
     child.stdout.on('error', error => terminate(1, `Failed to read stdout: ${String(error)}`, 'stream'))
     child.stderr.on('error', error => terminate(1, `Failed to read stderr: ${String(error)}`, 'stream'))
     child.stdout.on('data', captureStdout)
-    child.stderr.on('data', (chunk: Buffer) => capture(stderrChunks, chunk))
+    child.stderr.on('data', (chunk: Buffer) => capture(stderrChunks, chunk, options.onStderrChunk))
     child.once('close', code => finish(code))
     child.once('exit', () => {
       // Descendants can inherit output pipes after the immediate child exits.

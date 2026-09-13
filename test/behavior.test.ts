@@ -50,9 +50,8 @@ class DiscoveryTimeoutTransport extends TargetTransport {
   }
 }
 const createDelayed = () => {
-  const target = new RemoteTarget('fixture')
   const transport = new DelayedTransport
-  Object.defineProperty(target, 'transport', {value: transport})
+  const target = new RemoteTarget('fixture', {transport})
   return {
     target,
     transport,
@@ -94,9 +93,8 @@ test('exec returns a structured initialization timeout', async () => {
   await target.init()
 })
 test('exec rejects a transport timeout during discovery instead of claiming the command ran', async () => {
-  const target = new RemoteTarget('fixture')
   const transport = new DiscoveryTimeoutTransport
-  Object.defineProperty(target, 'transport', {value: transport})
+  const target = new RemoteTarget('fixture', {transport})
   await expect(target.exec(['definitely-never-ran'])).rejects.toMatchObject({
     result: {
       exitCode: 124,
@@ -107,8 +105,10 @@ test('exec rejects a transport timeout during discovery instead of claiming the 
   expect(transport.commands.some(command => command[0] === 'definitely-never-ran')).toBe(false)
 })
 test('runtime-backed exec lets the command timeout frame preserve partial output', async () => {
-  const target = new RemoteTarget('fixture', {runtimeCandidates: ['bun']})
-  Object.defineProperty(target, 'transport', {value: new LocalTargetTransport})
+  const target = new RemoteTarget('fixture', {
+    runtimeCandidates: ['bun'],
+    transport: new LocalTargetTransport,
+  })
   await target.init()
   const result = await target.exec([process.execPath, '--eval', 'process.stdout.write("started"); setTimeout(() => {}, 5000)'], {timeoutMs: 250})
   expect(result.exitCode).toBe(124)
@@ -278,3 +278,129 @@ for (const runtime of ['bun', 'node', 'deno'] as const satisfies Array<RuntimeNa
     expect(payload.result.stdout).toBe('hello\0\u2192')
   })
 }
+class SyntheticTransport extends TargetTransport {
+  override async runShellCommand(command: string, options: TransportCommandOptions = {}): Promise<InvocationResult> {
+    const emitter = this.createChunkEmitter(command, options)
+    const chunk = Buffer.from('synthetic-shell')
+    emitter.stdout(chunk)
+    return {
+      duration: 0,
+      exitCode: 0,
+      stdout: chunk.toString(),
+      system: {pid: 0},
+    }
+  }
+
+  override async runShellNeutralCommand(command: Array<string>, options: TransportCommandOptions = {}): Promise<InvocationResult> {
+    const emitter = this.createChunkEmitter(command, options)
+    const stdout = Buffer.from('synthetic-out')
+    const stderr = Buffer.from('synthetic-err')
+    emitter.stdout(stdout)
+    emitter.stderr(stderr)
+    return {
+      duration: 0,
+      exitCode: 0,
+      stderr: stderr.toString(),
+      stdout: stdout.toString(),
+      system: {pid: 0},
+    }
+  }
+}
+class DerivedLocalTransport extends LocalTargetTransport {}
+test('constructor accepts independent and built-in-derived transports', async () => {
+  const independent = new SyntheticTransport
+  const independentTarget = new RemoteTarget('synthetic', {transport: independent})
+  expect(independentTarget.transport).toBe(independent)
+  const directResult = await independentTarget.transport.runShellNeutralCommand(['synthetic', 'command'])
+  expect(directResult.stdout).toBe('synthetic-out')
+  const derived = new DerivedLocalTransport
+  const derivedTarget = new RemoteTarget('derived-local', {
+    runtimeCandidates: ['bun'],
+    transport: derived,
+  })
+  const run = await derivedTarget.run('return 42')
+  expect(derivedTarget.transport).toBe(derived)
+  expect(run.returnValue).toBe(42)
+})
+test('transport chunk events and per-invocation callbacks identify concurrent-safe invocations', async () => {
+  const transport = new SyntheticTransport
+  const events: Array<{command: ReadonlyArray<string> | string
+    invocationId: string
+    stream: string
+    text: string}> = []
+  const callbackChunks: Array<string> = []
+  const unsubscribeStdout = transport.on('stdout', event => {
+    events.push({
+      command: event.command,
+      invocationId: event.invocationId,
+      stream: event.stream,
+      text: Buffer.from(event.chunk).toString(),
+    })
+  })
+  const unsubscribeStderr = transport.on('stderr', event => {
+    events.push({
+      command: event.command,
+      invocationId: event.invocationId,
+      stream: event.stream,
+      text: Buffer.from(event.chunk).toString(),
+    })
+  })
+  try {
+    await transport.runShellNeutralCommand(['demo', 'argument'], {
+      onStderrChunk: chunk => callbackChunks.push(`stderr:${Buffer.from(chunk).toString()}`),
+      onStdoutChunk: chunk => callbackChunks.push(`stdout:${Buffer.from(chunk).toString()}`),
+    })
+  } finally {
+    unsubscribeStdout()
+    unsubscribeStderr()
+  }
+  expect(callbackChunks).toEqual(['stdout:synthetic-out', 'stderr:synthetic-err'])
+  expect(events.map(event => event.stream)).toEqual(['stdout', 'stderr'])
+  expect(events.map(event => event.text)).toEqual(['synthetic-out', 'synthetic-err'])
+  expect(events[0]?.command).toEqual(['demo', 'argument'])
+  expect(events[1]?.invocationId).toBe(events[0]?.invocationId)
+})
+test('runtime-backed exec exposes live command stdout and stderr chunks', async () => {
+  const transport = new LocalTargetTransport
+  const target = new RemoteTarget('streaming-fixture', {
+    runtimeCandidates: ['bun'],
+    transport,
+  })
+  await target.init()
+  const callbackStdout: Array<Buffer> = []
+  const callbackStderr: Array<Buffer> = []
+  const events: Array<{id: string
+    stream: string
+    text: string}> = []
+  const offStdout = transport.on('stdout', event => {
+    events.push({
+      id: event.invocationId,
+      stream: event.stream,
+      text: Buffer.from(event.chunk).toString(),
+    })
+  })
+  const offStderr = transport.on('stderr', event => {
+    events.push({
+      id: event.invocationId,
+      stream: event.stream,
+      text: Buffer.from(event.chunk).toString(),
+    })
+  })
+  try {
+    const result = await target.exec([process.execPath, '--eval', 'process.stdout.write("out"); process.stderr.write("err")'], {
+      onStderrChunk: chunk => callbackStderr.push(Buffer.from(chunk)),
+      onStdoutChunk: chunk => callbackStdout.push(Buffer.from(chunk)),
+    })
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toBe('out')
+    expect(result.stderr).toBe('err')
+  } finally {
+    offStdout()
+    offStderr()
+  }
+  expect(Buffer.concat(callbackStdout).toString()).toBe('out')
+  expect(Buffer.concat(callbackStderr).toString()).toBe('err')
+  expect(events.map(event => event.text).join('')).toContain('out')
+  expect(events.map(event => event.text).join('')).toContain('err')
+  expect(new Set(events.map(event => event.id)).size).toBe(1)
+})
