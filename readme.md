@@ -1,6 +1,6 @@
 # remote-target
 
-Run small JavaScript or TypeScript snippets and regular commands on another machine over SSH.
+Run small JavaScript or TypeScript snippets and regular commands locally, over SSH or inside Docker containers.
 
 It is designed for modern runtimes and modern hosts:
 
@@ -18,7 +18,8 @@ It is designed for modern runtimes and modern hosts:
 - discovers the remote OS, login shell and available runtimes
 - executes plain argv-style commands without shell quoting surprises
 - includes a `local` pseudo-target for tests and local tooling
-- accepts caller-supplied transports and supports subclassing the built-in local and SSH transports
+- targets Docker containers by ID or name, with optional remote daemon endpoints
+- accepts caller-supplied transports and supports subclassing the built-in local, SSH and container transports
 - exposes stdout/stderr chunks through transport events and per-invocation callbacks
 
 ## Install
@@ -115,9 +116,74 @@ const result = await RemoteTarget.run('local', () => ({
 }))
 ```
 
+## Container transports
+
+`ContainerTransport` executes in an existing, running Docker container by ID or name. It uses the local Docker CLI and inherits its current context, `DOCKER_HOST`, SSH configuration and TLS configuration. It does not create, start, stop or remove containers.
+
+```ts
+import RemoteTarget, {ContainerTransport, RemoteContainerTransport} from 'remote-target'
+
+// Use the caller's Docker configuration, including DOCKER_HOST=ssh://nas.
+const transport = new ContainerTransport(containerId, {user: 'agent'})
+const target = new RemoteTarget('mage-session', {
+  transport,
+  runtimeCandidates: ['bun'],
+})
+
+await target.init()
+const result = await target.run('return process.cwd()')
+
+// Or select the daemon explicitly. This is a subclass of ContainerTransport.
+const remote = new RemoteContainerTransport(containerId, 'ssh://nas', {user: 'agent'})
+const http = new RemoteContainerTransport(containerId, 'http://nas:2375')
+const https = new RemoteContainerTransport(containerId, 'https://docker.example:2376')
+```
+
+Both classes also accept an options object:
+
+```ts
+const transport = new ContainerTransport({container: containerId, user: '1000:1000'})
+const remote = new RemoteContainerTransport({
+  container: containerId,
+  endpoint: 'ssh://nas',
+  user: 'agent',
+})
+```
+
+The exported `ContainerTransportOptions` and `RemoteContainerTransportOptions` types describe these options:
+
+| Option | Meaning |
+| --- | --- |
+| `container` | ID or name of the running container. |
+| `user` | Optional container username or UID, with an optional `:group` or `:gid`. Otherwise Docker uses the container's configured user. |
+| `dockerCommand` | Local executable path or argv prefix. Defaults to `'docker'`; for example `['docker', '--context', 'nas']` or `['docker', '--tlscacert', '/keys/ca.pem', '--tlscert', '/keys/client.pem', '--tlskey', '/keys/client-key.pem']`. |
+| `shellCommand` | Interpreter prefix for `runShellCommand()` only. Defaults to `['sh', '-c']` **inside the container**, independently of the caller's OS. Windows containers can use `['pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-Command']`. |
+| `endpoint` | Required for `RemoteContainerTransport`. Accepts Docker `ssh://`, `tcp://`, `unix://` and `npipe://` endpoints, plus HTTP(S) URLs. |
+
+An explicit endpoint is passed through Docker's `--host` option. Do not combine it with an explicit `--context` in `dockerCommand`. HTTP(S) URLs are translated into TCP endpoints: HTTP explicitly disables TLS and clears inherited Docker TLS switches for the CLI child only, while HTTPS enables certificate verification. The caller's environment is never changed. URLs without ports use the normal HTTP/HTTPS defaults of 80/443; specify 2375/2376 explicitly for daemons using those ports. URL credentials, non-root paths, queries and fragments are rejected because they cannot be represented faithfully by this CLI transport. Supply client certificates through Docker's configuration or the trusted CLI prefix. Prefer SSH or verified HTTPS over an unprotected HTTP daemon.
+
+`runShellNeutralCommand()` passes literal argv to `docker exec`; it never inserts `sh -c` or allocates a TTY. Supplying stdin, including an empty string, adds `--interactive`. Generated runtime programs, result-frame filtering, output limits, chunk events and invocation callbacks therefore use the same machinery as the other built-in transports.
+
+For Mage-style custom runners, the direct interface remains unchanged:
+
+```ts
+const invocation = await target.transport.runShellNeutralCommand([target.getRuntime().file, '-'], {
+  stdin: 'process.stdout.write(Buffer.from("hello").toString("base64"))',
+  timeoutMs: 10_000,
+})
+```
+
+This example selects Bun. Per-command working directories and environment variables remain the custom runner's responsibility; the transport does not add a second cwd/env policy. Shell-neutral execution and runtime discovery do not require a shell or SSH server inside the container. Only an explicit `runShellCommand()` needs the configured interpreter.
+
+Subclass either transport and override the protected `getDockerBaseCommand()`, `getDockerEnvironment()` or `runContainer(command, options)` hooks when needed. A replacement execution path must retain the framing and chunk-callback contract described below.
+
+**Cancellation scope:** timeouts and abort signals terminate the local Docker CLI through the existing bounded process cleanup. They do not guarantee termination of the process or its descendants inside the container. The caller still owns container lifecycle and any stronger in-container cancellation policy; this transport never kills the entire container as a substitute.
+
+Run `bun run test:container` for the focused unit and real-container suites. Set `DOCKER_HOST=ssh://nas` to test a remote daemon. `REMOTE_TARGET_SKIP_INTEGRATION=1` skips real-container tests without probing Docker, and `REMOTE_TARGET_CONTAINER_IMAGE` overrides the pinned Bun test image. The suite creates no SSH server or published container ports and removes only its own uniquely named container.
+
 ## Custom transports and chunk events
 
-Pass a `TargetTransport` instance through `transport` to replace the built-in local/OpenSSH transport. The instance can inherit directly from the abstract base or from `LocalTargetTransport`/`SshTargetTransport`.
+Pass a `TargetTransport` instance through `transport` to replace the built-in local/OpenSSH transport. The instance can inherit directly from the abstract base or from `LocalTargetTransport`, `SshTargetTransport`, `ContainerTransport` or `RemoteContainerTransport`.
 
 ```ts
 import RemoteTarget, {LocalTargetTransport} from 'remote-target'
@@ -255,4 +321,4 @@ Select `runtimeCandidates: ['bun']` for the command form above. Node and Deno re
 - raw function input is serialized with `Function.prototype.toString()` and must be self-contained. Script strings support import syntax but do not capture caller closures either. Pass caller values through explicit `globals` injection.
 - SSH uses batch mode, a 10-second connection timeout and `StrictHostKeyChecking=accept-new` by default. Pre-provision a known-hosts file and set `strictHostKeyChecking: 'yes'` when first-use trust is unsuitable.
 - timeout and cancellation cleanup first request termination, then escalate after 500 ms and bound stream cleanup. This can add up to roughly one second after a deadline. Killing an SSH client does not guarantee remote process-tree cleanup; commands that survive connection teardown require target-specific cleanup.
-- integration tests require Docker and SSH. Test keys are generated with `make-ssh-keys`. `REMOTE_TARGET_SKIP_INTEGRATION=1` skips the matrix before probing those tools. The matrix isolates SSH configuration and host-key storage, bounds child processes and removes only its own containers, image tags and temporary files.
+- the SSH matrix integration tests require Docker and SSH. Test keys are generated with `make-ssh-keys`. `REMOTE_TARGET_SKIP_INTEGRATION=1` skips the matrix before probing those tools. The matrix isolates SSH configuration and host-key storage, bounds child processes and removes only its own containers, image tags and temporary files.

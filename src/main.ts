@@ -254,4 +254,9 @@ export {LocalTargetTransport, SshTargetTransport, TargetTransport}
 export type * from './lib/remoteTarget/types.ts'
 export type {TransportChunkEvent, TransportChunkListener, TransportChunkStream, TransportCommand} from './lib/transport/base/TargetTransport.ts'
 
+export {ContainerTransport} from './lib/transport/ContainerTransport.ts'
+
+export type {ContainerTransportOptions} from './lib/transport/ContainerTransport.ts'
+export {RemoteContainerTransport} from './lib/transport/RemoteContainerTransport.ts'
+export type {RemoteContainerTransportOptions} from './lib/transport/RemoteContainerTransport.ts'
 export type {SshTargetTransportOptions} from './lib/transport/SshTargetTransport.ts'

@@ -219,7 +219,7 @@ const resolveSshHostname = async (target: NonNullable<ReturnType<typeof parseDoc
   if (result.exitCode !== 0) {
     throw new Error(`Could not resolve Docker SSH host ${destination}.\n${result.stderr ?? ''}`)
   }
-  const hostname = /^hostname\s+(?<hostname>.+)$/imu.exec(result.stdout ?? '')?.groups.hostname.trim()
+  const hostname = /^hostname\s+(?<hostname>.+)$/imu.exec(result.stdout ?? '')?.groups?.hostname.trim()
   return hostname || target.host
 }
 const dockerHostSshTarget = parseDockerHostSshTarget()
