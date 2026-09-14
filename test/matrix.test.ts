@@ -54,6 +54,7 @@ type RuntimeContext = {
   runtimeInfo: ReturnType<RemoteTarget['getRuntime']>
   runtimeWorkFolder: string
   sshConfigFile: string
+  sshHost: string
 }
 
 const dockerfileTemplate = await fs.readFile(path.join(import.meta.dir, 'lib/Dockerfile.hbs'), 'utf8')
@@ -192,6 +193,36 @@ const isCommandAvailable = async (command: Array<string>) => {
     return false
   }
 }
+const parseDockerHostSshTarget = (dockerHost = Bun.env.DOCKER_HOST) => {
+  const normalized = dockerHost?.trim()
+  if (!normalized?.startsWith('ssh://')) {
+    return
+  }
+  const url = new URL(normalized)
+  return {
+    host: url.hostname,
+    port: url.port ? Number(url.port) : undefined,
+    user: url.username ? decodeURIComponent(url.username) : undefined,
+  }
+}
+const resolveSshHostname = async (target: NonNullable<ReturnType<typeof parseDockerHostSshTarget>>) => {
+  const destination = target.user ? `${target.user}@${target.host}` : target.host
+  const result = await runProcess([
+    'ssh',
+    '-G',
+    ...target.port === undefined ? [] : ['-p', String(target.port)],
+    destination,
+  ], {
+    timeoutMs: 5000,
+    maxOutputBytes: 128_000,
+  })
+  if (result.exitCode !== 0) {
+    throw new Error(`Could not resolve Docker SSH host ${destination}.\n${result.stderr ?? ''}`)
+  }
+  const hostname = /^hostname\s+(?<hostname>.+)$/imu.exec(result.stdout ?? '')?.groups.hostname.trim()
+  return hostname || target.host
+}
+const dockerHostSshTarget = parseDockerHostSshTarget()
 const skipIntegration = Bun.env.REMOTE_TARGET_SKIP_INTEGRATION === '1'
 const matrixPrerequisitesAvailable = !skipIntegration && await (async () => {
   const [dockerAvailable, sshAvailable] = await Promise.all([
@@ -204,6 +235,8 @@ const matrixDescribe = matrixPrerequisitesAvailable ? describe : describe.skip
 if (!matrixPrerequisitesAvailable && !skipIntegration) {
   throw new Error('Docker and SSH are required for integration tests.')
 }
+const dockerSshHost = matrixPrerequisitesAvailable && dockerHostSshTarget ? await resolveSshHostname(dockerHostSshTarget) : undefined
+const sshPublishAddress = dockerSshHost ? '0.0.0.0::22' : '127.0.0.1::22'
 const getBaseSetupStep = (baseCase: BaseCase) => {
   if (baseCase.kind === 'apt') {
     return String.raw`ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -302,7 +335,14 @@ const renderDockerfile = (baseCase: BaseCase, runtimeCase: RuntimeCase, authoriz
     sshAuthorizedKeyBase64: Buffer.from(authorizedKey, 'utf8').toString('base64'),
   })
 }
-const inspectPublishedSshPort = async (containerName: string) => {
+const normalizePublishedSshHost = (host: string) => {
+  const unbracketed = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host
+  if (unbracketed === '0.0.0.0' || unbracketed === '::' || unbracketed === '127.0.0.1' || unbracketed === 'localhost') {
+    return dockerSshHost ?? '127.0.0.1'
+  }
+  return unbracketed
+}
+const inspectPublishedSshEndpoint = async (containerName: string) => {
   const deadline = Date.now() + 30_000
   let lastStdout: string | undefined
   let lastStderr: string | undefined
@@ -313,14 +353,23 @@ const inspectPublishedSshPort = async (containerName: string) => {
     })
     lastStdout = result.stdout
     lastStderr = result.stderr
-    const match = /:(?<port>\d+)\s*$/u.exec(result.stdout ?? '')
+    const lines = (result.stdout ?? '').trim().split(/\r?\n/u).map(line => line.trim()).filter(Boolean)
+    const preferredLine = dockerSshHost ? lines.find(line => !line.startsWith('127.0.0.1:')) ?? lines[0] : lines.find(line => line.startsWith('127.0.0.1:')) ?? lines[0]
+    if (!preferredLine) {
+      await Bun.sleep(500)
+      continue
+    }
+    const match = /^(?<host>.+):(?<port>\d+)$/u.exec(preferredLine)
     const hostPort = match?.groups?.port ? Number(match.groups.port) : Number.NaN
-    if (result.exitCode === 0 && Number.isInteger(hostPort) && hostPort > 0) {
-      return hostPort
+    if (result.exitCode === 0 && match?.groups?.host && Number.isInteger(hostPort) && hostPort > 0) {
+      return {
+        host: normalizePublishedSshHost(match.groups.host),
+        port: hostPort,
+      }
     }
     await Bun.sleep(500)
   }
-  throw new Error(`Expected a valid published SSH port for ${containerName}, got stdout ${JSON.stringify(lastStdout)} and stderr ${JSON.stringify(lastStderr)}.`)
+  throw new Error(`Expected a valid published SSH endpoint for ${containerName}, got stdout ${JSON.stringify(lastStdout)} and stderr ${JSON.stringify(lastStderr)}.`)
 }
 const getDockerLogs = async (containerName: string) => {
   const result = await runProcess(['docker', 'logs', '--tail', '200', containerName], {
@@ -329,10 +378,10 @@ const getDockerLogs = async (containerName: string) => {
   })
   return [result.stdout, result.stderr].filter(Boolean).join('\n')
 }
-const waitForSsh = async (knownHostsFile: string, sshConfigFile: string, privateKeyFile: string, hostPort: number, containerName: string) => {
+const waitForSsh = async (sshHost: string, knownHostsFile: string, sshConfigFile: string, privateKeyFile: string, hostPort: number, containerName: string) => {
   const deadline = Date.now() + 90_000
   const transport = new SshTargetTransport({
-    host: '127.0.0.1',
+    host: sshHost,
     user: 'root',
     port: hostPort,
     keyFile: privateKeyFile,
@@ -398,6 +447,7 @@ const createRuntimeContext = async (baseCase: BaseCase, runtimeCase: RuntimeCase
     imageTag: ownedImageTag,
     knownHostsFile,
     sshConfigFile,
+    sshHost: '',
     remoteTarget: undefined,
     runtimeInfo: undefined,
     runtimeWorkFolder,
@@ -405,12 +455,14 @@ const createRuntimeContext = async (baseCase: BaseCase, runtimeCase: RuntimeCase
   try {
     await Bun.write(dockerfileFile, dockerfileContent)
     await ensureCommandSucceeded(['docker', 'build', '--tag', ownedImageTag, '--file', dockerfileFile, runtimeWorkFolder], `Building the Docker image for ${baseCase.id} with ${runtimeCase.id}`, buildTimeoutMs - 300_000)
-    const runResult = await ensureCommandSucceeded(['docker', 'run', '--detach', '--publish', '127.0.0.1::22', '--name', containerName, ownedImageTag], `Starting the Docker container for ${baseCase.id} with ${runtimeCase.id}`)
+    const runResult = await ensureCommandSucceeded(['docker', 'run', '--detach', '--publish', sshPublishAddress, '--name', containerName, ownedImageTag], `Starting the Docker container for ${baseCase.id} with ${runtimeCase.id}`)
     runtimeContextDraft.containerId = runResult.stdout?.trim() || containerName
-    runtimeContextDraft.hostPort = await inspectPublishedSshPort(containerName)
-    await waitForSsh(knownHostsFile, sshConfigFile, baseContext.privateKeyFile, runtimeContextDraft.hostPort, containerName)
+    const endpoint = await inspectPublishedSshEndpoint(containerName)
+    runtimeContextDraft.hostPort = endpoint.port
+    runtimeContextDraft.sshHost = endpoint.host
+    await waitForSsh(endpoint.host, knownHostsFile, sshConfigFile, baseContext.privateKeyFile, endpoint.port, containerName)
     const remoteTarget = new RemoteTarget({
-      host: '127.0.0.1',
+      host: endpoint.host,
       keyFile: path.enforceForwardSlashes(baseContext.privateKeyFile),
       knownHostsFile,
       sshConfigFile,

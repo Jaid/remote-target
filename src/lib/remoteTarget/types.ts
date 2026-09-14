@@ -86,7 +86,7 @@ export type NormalizedRunInput = {
 }
 
 export type TransportCommandOptions = {
-  /** Internal framed stdout capture. Ordinary transport callers receive unmodified stdout. */
+  /** Structured stdout framing used by RemoteTarget discovery/run/exec. Custom transports must honor this contract when these high-level APIs are used. */
   frame?: {
     marker: string
     maxBytes: number

@@ -4,7 +4,7 @@ Run small JavaScript or TypeScript snippets and regular commands on another mach
 
 It is designed for modern runtimes and modern hosts:
 
-- caller runtime: Bun 1.3.14 or newer, or Node 24 or newer
+- caller runtime: Bun 1.3.14 or newer, or Node 24.11 or newer
 - remote runtimes: latest Bun, Node or Deno
 - remote operating systems: Windows 11 and modern Linux distributions
 
@@ -134,6 +134,8 @@ const target = new RemoteTarget('custom-target', {
 ```
 
 Fully independent transports implement `runShellCommand()` and `runShellNeutralCommand()`. Custom implementations can use the protected `createChunkEmitter(command, options)` helper so transport-level listeners and per-call callbacks receive the same chunks.
+
+For `RemoteTarget.run()` and runtime-backed `exec()`, a fully independent transport must also honor `options.frame`: detect and remove the marked result frame from stdout, call its `onFrame`/`onError` callbacks and keep those frame bytes out of returned/user-visible stdout. The built-in transports already do this. A subclass that replaces the built-in low-level execution path must preserve the same contract.
 
 ```ts
 import type {InvocationResult, TransportCommandOptions} from 'remote-target'
