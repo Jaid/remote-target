@@ -36,7 +36,7 @@ try {
   run(['bun', 'add', '--linker', 'isolated', path.join(folder, `${packageMetadata.name}-${packageMetadata.version}.tgz`)], consumer)
   const smoke = [
     "import assert from 'node:assert/strict'",
-    "import RemoteTarget, {ContainerTransport, LocalTargetTransport, RemoteContainerTransport, TargetTransport} from 'remote-target'",
+    "import RemoteTarget, {ContainerTransport, LocalTargetTransport, TargetTransport} from 'remote-target'",
     "const local = new RemoteTarget('local')",
     'const run = await local.run(\'import {Buffer} from "node:buffer"; return {buffer: Buffer.from("hello"), zero: -0, sparse: Array(2), map: new Map([[1, new Set([2])]])}\', {maxOutputBytes: 0})',
     'assert.equal(run.returnValue.buffer.toString(), "hello")',
@@ -57,10 +57,8 @@ try {
     'assert.equal(Buffer.concat(streamed).toString(), "hello stdin")',
     'const dockerCommand = [process.execPath, "--eval", "process.stdout.write(JSON.stringify(42))", "--"]',
     'const container = new ContainerTransport("fixture", {dockerCommand})',
-    'const remoteContainer = new RemoteContainerTransport({container: "fixture", endpoint: "ssh://nas", dockerCommand})',
     'assert(container instanceof TargetTransport)',
-    'assert(remoteContainer instanceof ContainerTransport)',
-    'for (const selected of [container, remoteContainer]) {',
+    'for (const selected of [container]) {',
     '  const result = await selected.runShellNeutralCommand(["bun", "-"], {stdin: "program", timeoutMs: 10000})',
     '  assert.equal(result.exitCode, 0)',
     '  assert.equal(result.stdout, "42")',
@@ -70,8 +68,8 @@ try {
   run(['bun', path.join(consumer, 'smoke.mjs')], unrelated)
   run(['node', path.join(consumer, 'smoke.mjs')], unrelated)
   const declarations = [
-    "import type {ContainerTransportOptions, DiscoveryInfo, InvocationResult, RemoteContainerTransportOptions, RuntimeInfo, TransportChunkEvent} from 'remote-target'",
-    "import RemoteTarget, {ContainerTransport, LocalTargetTransport, RemoteContainerTransport, RemoteTargetError, SshTargetTransport, TargetTransport} from 'remote-target'",
+    "import type {ContainerTransportOptions, DiscoveryInfo, InvocationResult, RemoteTargetAssumptions, RuntimeInfo, TransportChunkEvent} from 'remote-target'",
+    "import RemoteTarget, {ContainerTransport, LocalTargetTransport, RemoteTargetError, SshTargetTransport, TargetTransport} from 'remote-target'",
     'class CustomTransport extends LocalTargetTransport {}',
     'const transport: TargetTransport = new CustomTransport()',
     'const target = new RemoteTarget("local", {sshShell: "posix", initializationTimeoutMs: 30000, transport})',
@@ -84,11 +82,10 @@ try {
     'const sshClass: typeof SshTargetTransport = SshTargetTransport',
     'const error = new RemoteTargetError("failure", invocation)',
     'const containerOptions: ContainerTransportOptions = {container: "fixture", user: "1000:1000", dockerCommand: ["docker", "--context", "nas"]}',
-    'const remoteOptions: RemoteContainerTransportOptions = {container: "fixture", endpoint: "ssh://nas", shellCommand: ["sh", "-c"]}',
     'const container: TargetTransport = new ContainerTransport(containerOptions)',
-    'const remoteContainer: ContainerTransport = new RemoteContainerTransport(remoteOptions)',
-    'const stringRemote = new RemoteContainerTransport("fixture", "http://nas:2375", {user: "agent"})',
-    'void [discovery, runtime, invocation, error.result, sshClass, container, remoteContainer, stringRemote]',
+    'const assumptions: RemoteTargetAssumptions = {os: {name: "unknown"}, runtimes: [{file: "bun", name: "bun"}], shell: {name: "unknown"}}',
+    'const assumed = new RemoteTarget("assumed", {assumptions, transport: container, runtimeCandidates: ["bun"]})',
+    'void [discovery, runtime, invocation, error.result, sshClass, container, assumed]',
   ].join('\n')
   await fs.writeFile(path.join(consumer, 'smoke.ts'), declarations)
   run(['bun', path.join(root, 'node_modules/typescript/bin/tsc'), '--ignoreConfig', '--noEmit', '--module', 'nodenext', '--moduleResolution', 'nodenext', '--target', 'esnext', path.join(consumer, 'smoke.ts')], unrelated)

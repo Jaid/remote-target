@@ -1,124 +1,142 @@
 import type {TargetTransport} from '../transport/base/TargetTransport.ts'
-import type {DiscoveryInfo, LinuxDistribution, RuntimeInfo, RuntimeName, ShellInfo, ShellName} from './types.ts'
+import type {DiscoveryInfo, LinuxDistribution, OsInfo, RuntimeInfo, RuntimeName, ShellInfo, ShellName} from './types.ts'
 
 import {InvocationDeadline} from './InvocationDeadline.ts'
 import {RemoteTargetError} from './RemoteTargetError.ts'
 import {ResultFrame} from './ResultFrame.ts'
 import {runProcess} from './runProcess.ts'
 
+type DiscoverySections = {
+  os?: boolean
+  runtimes?: boolean
+  shell?: boolean
+}
+
 // Embedded remotely; all runtime dependencies and helper state remain inside this function.
-async function collectDiscovery(timeoutMs: number, run: typeof runProcess): Promise<Omit<DiscoveryInfo, 'bootstrapRuntime'>> {
+async function collectDiscovery(timeoutMs: number, run: typeof runProcess, sections: DiscoverySections = {}): Promise<Omit<DiscoveryInfo, 'bootstrapRuntime'>> {
   const fs = await import('node:fs')
   const path = await import('node:path')
   const os = await import('node:os')
   const {default: process} = await import('node:process')
   const deadline = performance.now() + timeoutMs
-  const names: Array<RuntimeName> = ['bun', 'node', 'deno']
-  let current: RuntimeName = 'node'
-  if (typeof Bun === 'object') {
-    current = 'bun'
-  } else if (typeof (globalThis as {Deno?: unknown}).Deno === 'object') {
-    current = 'deno'
-  }
+  const discoverOs = sections.os !== false
+  const discoverRuntimes = sections.runtimes !== false
+  const discoverShell = sections.shell !== false
   // These helpers must remain inside the function embedded on the target.
   // eslint-disable-next-line unicorn/consistent-function-scoping
   const normalizePath = (value: string) => value.replaceAll('\\', '/')
-  // eslint-disable-next-line unicorn/consistent-function-scoping
-  const firstLine = (value: string | undefined) => value?.split(/\r?\n/u).find(line => line.trim())?.trim()
-  const paths = Object.entries(process.env).find(([key]) => key.toLowerCase() === 'path')?.[1]?.split(path.delimiter) ?? []
-  const findExecutable = (name: string) => {
-    if (name === current) {
-      return process.execPath
-    }
-    const suffixes = process.platform === 'win32' ? ['', '.exe', '.com'] : ['']
-    for (const directory of paths) {
-      for (const suffix of suffixes) {
-        const file = path.join(directory.replaceAll(/^"|"$/gu, ''), name + suffix)
-        try {
-          if (!fs.statSync(file).isFile()) {
-            continue
-          }
-          fs.accessSync(file, process.platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK)
-          return file
-        } catch {}
-      }
-    }
-  }
   const runtimes: Array<RuntimeInfo> = []
-  for (const name of names) {
-    const file = findExecutable(name)
-    if (!file) {
-      continue
+  if (discoverRuntimes) {
+    const names: Array<RuntimeName> = ['bun', 'node', 'deno']
+    let current: RuntimeName = 'node'
+    if (typeof Bun === 'object') {
+      current = 'bun'
+    } else if (typeof (globalThis as {Deno?: unknown}).Deno === 'object') {
+      current = 'deno'
     }
-    const remaining = Math.ceil(deadline - performance.now())
-    if (remaining <= 0) {
-      throw new Error('Discovery timed out.')
-    }
-    const result = await run([file, '--version'], {
-      timeoutMs: Math.min(2000, remaining),
-      maxOutputBytes: 64_000,
-    })
-    if (result.failure && !(result.failure === 'spawn' && result.errorCode === 'ENOENT')) {
-      throw new Error(result.stderr ?? 'Runtime probe failed.')
-    }
-    if (result.exitCode !== 0) {
-      continue
-    }
-    let version = firstLine(result.stdout)
-    if (name === 'deno') {
-      version = version?.startsWith('deno ') ? version.slice(5) : undefined
-    }
-    if (!version || !(name === 'node' ? /^v\d/u : /^\d/u).test(version)) {
-      continue
-    }
-    runtimes.push({
-      file: normalizePath(file),
-      name,
-      version,
-    })
-  }
-  let distribution: LinuxDistribution = 'unknown'
-  if (process.platform === 'linux') {
-    try {
-      const release: Record<string, string | undefined> = Object.fromEntries(fs.readFileSync('/etc/os-release', 'utf8').split(/\r?\n/u).flatMap(line => {
-        const match = /^([A-Z_]+)=(.*)$/u.exec(line)
-        if (!match) {
-          return []
-        }
-        return [[match[1], match[2].replace(/^(["'])(.*)\1$/u, '$2')]]
-      }))
-      const ids = new Set([release.ID, ...release.ID_LIKE?.split(/\s+/u) ?? []])
-      if (ids.has('nixos')) {
-        distribution = 'nixos'
-      } else if (ids.has('arch')) {
-        distribution = 'arch'
-      } else if (ids.has('debian') || ids.has('ubuntu')) {
-        distribution = 'debian'
+    const firstLine = (value: string | undefined) => value?.split(/\r?\n/u).find(line => line.trim())?.trim()
+    const paths = Object.entries(process.env).find(([key]) => key.toLowerCase() === 'path')?.[1]?.split(path.delimiter) ?? []
+    const findExecutable = (name: string) => {
+      if (name === current) {
+        return process.execPath
       }
-    } catch {}
+      const suffixes = process.platform === 'win32' ? ['', '.exe', '.com'] : ['']
+      for (const directory of paths) {
+        for (const suffix of suffixes) {
+          const file = path.join(directory.replaceAll(/^"|"$/gu, ''), name + suffix)
+          try {
+            if (!fs.statSync(file).isFile()) {
+              continue
+            }
+            fs.accessSync(file, process.platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK)
+            return file
+          } catch {}
+        }
+      }
+    }
+    for (const name of names) {
+      const file = findExecutable(name)
+      if (!file) {
+        continue
+      }
+      const remaining = Math.ceil(deadline - performance.now())
+      if (remaining <= 0) {
+        throw new Error('Discovery timed out.')
+      }
+      const result = await run([file, '--version'], {
+        timeoutMs: Math.min(2000, remaining),
+        maxOutputBytes: 64_000,
+      })
+      if (result.failure && !(result.failure === 'spawn' && result.errorCode === 'ENOENT')) {
+        throw new Error(result.stderr ?? 'Runtime probe failed.')
+      }
+      if (result.exitCode !== 0) {
+        continue
+      }
+      let version = firstLine(result.stdout)
+      if (name === 'deno') {
+        version = version?.startsWith('deno ') ? version.slice(5) : undefined
+      }
+      if (!version || !(name === 'node' ? /^v\d/u : /^\d/u).test(version)) {
+        continue
+      }
+      runtimes.push({
+        file: normalizePath(file),
+        name,
+        version,
+      })
+    }
   }
-  const shellFile = process.platform === 'win32' ? process.env.ComSpec : process.env.SHELL
-  const basename = path.basename(shellFile ?? '').toLowerCase().replace(/\.exe$/u, '')
-  let shellName: ShellName = 'unknown'
-  if (basename === 'pwsh' || basename === 'powershell') {
-    shellName = 'powershell'
-  } else if (basename === 'cmd' || basename === 'fish' || basename === 'sh' || basename === 'bash' || basename === 'zsh') {
-    shellName = basename
-  }
-  return {
-    os: process.platform === 'linux' ? {
+  let osInfo: OsInfo = {name: 'unknown'}
+  if (discoverOs) {
+    let distribution: LinuxDistribution = 'unknown'
+    if (process.platform === 'linux') {
+      try {
+        const release: Record<string, string | undefined> = Object.fromEntries(fs.readFileSync('/etc/os-release', 'utf8').split(/\r?\n/u).flatMap(line => {
+          const match = /^([A-Z_]+)=(.*)$/u.exec(line)
+          if (!match) {
+            return []
+          }
+          return [[match[1], match[2].replace(/^(["'])(.*)\1$/u, '$2')]]
+        }))
+        const ids = new Set([release.ID, ...release.ID_LIKE?.split(/\s+/u) ?? []])
+        if (ids.has('nixos')) {
+          distribution = 'nixos'
+        } else if (ids.has('arch')) {
+          distribution = 'arch'
+        } else if (ids.has('debian') || ids.has('ubuntu')) {
+          distribution = 'debian'
+        }
+      } catch {}
+    }
+    osInfo = process.platform === 'linux' ? {
       name: 'linux',
       distribution,
       release: os.release(),
     } : {
       name: process.platform === 'win32' ? 'windows' : 'unknown',
       release: os.release(),
-    },
-    runtimes,
-    shell: {
+    }
+  }
+  let shell: ShellInfo = {name: 'unknown'}
+  if (discoverShell) {
+    const shellFile = process.platform === 'win32' ? process.env.ComSpec : process.env.SHELL
+    const basename = path.basename(shellFile ?? '').toLowerCase().replace(/\.exe$/u, '')
+    let shellName: ShellName = 'unknown'
+    if (basename === 'pwsh' || basename === 'powershell') {
+      shellName = 'powershell'
+    } else if (basename === 'cmd' || basename === 'fish' || basename === 'sh' || basename === 'bash' || basename === 'zsh') {
+      shellName = basename
+    }
+    shell = {
       name: shellName,
       ...shellFile ? {file: normalizePath(shellFile)} : {},
-    },
+    }
+  }
+  return {
+    os: osInfo,
+    runtimes,
+    shell,
   }
 }
 
@@ -154,7 +172,7 @@ const isDiscoveryInfo = (value: {os?: unknown
   return runtimes.every((runtime: unknown) => isRecord(runtime) && typeof runtime.file === 'string' && ['bun', 'node', 'deno'].includes(String(runtime.name)) && (runtime.version === undefined || typeof runtime.version === 'string'))
 }
 
-export const discoverTarget = async (transport: TargetTransport, bootstrapRuntime: RuntimeInfo, deadline = new InvocationDeadline({timeoutMs: 30_000})): Promise<DiscoveryInfo> => {
+export const discoverTarget = async (transport: TargetTransport, bootstrapRuntime: RuntimeInfo, deadline = new InvocationDeadline({timeoutMs: 30_000}), sections: DiscoverySections = {}): Promise<DiscoveryInfo> => {
   const frame = new ResultFrame(65_536)
   const result = await transport.runShellNeutralCommand(getRuntimeCommand(bootstrapRuntime), {
     ...deadline.options(),
@@ -163,7 +181,7 @@ export const discoverTarget = async (transport: TargetTransport, bootstrapRuntim
     requireStdinDelivery: true,
     stdin: `const run = ${runProcess.toString()}
 const collect = ${collectDiscovery.toString()}
-console.log(${JSON.stringify(frame.marker)} + JSON.stringify({ok: true, ...await collect(${deadline.remaining() ?? 30_000}, run)}))`,
+console.log(${JSON.stringify(frame.marker)} + JSON.stringify({ok: true, ...await collect(${deadline.remaining() ?? 30_000}, run, ${JSON.stringify(sections)})}))`,
   })
   const raw = frame.read<{ok: boolean
     os?: unknown
@@ -192,7 +210,15 @@ const probe = async (transport: TargetTransport, command: Array<string>, deadlin
   return result
 }
 
-export const discoverWithoutRuntime = async (transport: TargetTransport, deadline = new InvocationDeadline({timeoutMs: 30_000})): Promise<DiscoveryInfo> => {
+export const discoverWithoutRuntime = async (transport: TargetTransport, deadline = new InvocationDeadline({timeoutMs: 30_000}), sections: Pick<DiscoverySections, 'os' | 'shell'> = {}): Promise<DiscoveryInfo> => {
+  const shell = sections.shell === false ? undefined : transport.getShell()
+  if (sections.os === false) {
+    return {
+      os: {name: 'unknown'},
+      runtimes: [],
+      shell: shell ?? {name: 'unknown'},
+    }
+  }
   const linux = await probe(transport, ['uname', '-s'], deadline)
   if (linux.exitCode === 0 && linux.stdout?.trim().toLowerCase() === 'linux') {
     return {
@@ -201,10 +227,9 @@ export const discoverWithoutRuntime = async (transport: TargetTransport, deadlin
         distribution: 'unknown',
       },
       runtimes: [],
-      shell: transport.getShell() ?? {name: 'unknown'},
+      shell: shell ?? {name: 'unknown'},
     }
   }
-  const shell = transport.getShell()
   if (shell?.name === 'powershell' || shell?.name === 'cmd') {
     return {
       os: {name: 'windows'},
@@ -215,11 +240,11 @@ export const discoverWithoutRuntime = async (transport: TargetTransport, deadlin
   return {
     os: {name: 'unknown'},
     runtimes: [],
-    shell: transport.getShell() ?? {name: 'unknown'},
+    shell: shell ?? {name: 'unknown'},
   }
 }
 
-export const probeBootstrapRuntime = async (transport: TargetTransport, runtimeNames: Array<RuntimeName> = ['bun', 'node', 'deno'], deadline = new InvocationDeadline({timeoutMs: 30_000})): Promise<DiscoveryInfo | undefined> => {
+export const probeBootstrapRuntime = async (transport: TargetTransport, runtimeNames: Array<RuntimeName> = ['bun', 'node', 'deno'], deadline = new InvocationDeadline({timeoutMs: 30_000}), sections: DiscoverySections = {}): Promise<DiscoveryInfo | undefined> => {
   for (const name of runtimeNames) {
     const version = await probe(transport, [name, '--version'], deadline)
     if (version.exitCode !== 0) {
@@ -231,6 +256,6 @@ export const probeBootstrapRuntime = async (transport: TargetTransport, runtimeN
       version: name === 'deno' ? version.stdout?.trim().split(/\r?\n/u)[0]?.replace(/^deno /u, '') : version.stdout?.trim().split(/\r?\n/u)[0],
     }
     // A runtime that starts but cannot execute discovery is not an absent runtime.
-    return discoverTarget(transport, runtime, deadline)
+    return discoverTarget(transport, runtime, deadline, sections)
   }
 }

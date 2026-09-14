@@ -3,7 +3,7 @@ import type {ContainerTransportOptions, TransportChunkEvent, TransportCommandOpt
 import {expect, test} from 'bun:test'
 import {fileURLToPath} from 'node:url'
 
-import RemoteTarget, {ContainerTransport, RemoteContainerTransport, TargetTransport} from '#src/main.ts'
+import RemoteTarget, {ContainerTransport, TargetTransport} from '#src/main.ts'
 
 const fixture = fileURLToPath(new URL('fixture/docker.mjs', import.meta.url))
 const dockerCommand = (mode = 'record') => [process.execPath, fixture, mode]
@@ -21,17 +21,6 @@ class VisibleContainer extends ContainerTransport {
   getCommand() {
     return this.getDockerBaseCommand()
   }
-  getEnvironment() {
-    return this.getDockerEnvironment()
-  }
-}
-class VisibleRemoteContainer extends RemoteContainerTransport {
-  getCommand() {
-    return this.getDockerBaseCommand()
-  }
-  getEnvironment() {
-    return this.getDockerEnvironment()
-  }
 }
 test('container constructors accept IDs, names and option objects', () => {
   const transport = new VisibleContainer('abc123', {user: '1000:1000'})
@@ -43,17 +32,6 @@ test('container constructors accept IDs, names and option objects', () => {
     container: 'mage-session',
     user: 'agent',
   }).user).toBe('agent')
-  const remote = new VisibleRemoteContainer('abc123', 'ssh://nas', {user: 'agent'})
-  expect(remote).toBeInstanceOf(ContainerTransport)
-  expect(remote.endpoint).toBe('ssh://nas')
-  expect(remote.user).toBe('agent')
-  expect(remote.getCommand()).toEqual(['docker', '--host', 'ssh://nas'])
-  const object = new VisibleRemoteContainer({
-    container: 'mage-session',
-    endpoint: 'ssh://nas',
-    user: 'agent',
-  })
-  expect(object.getCommand()).toEqual(remote.getCommand())
 })
 test('Docker and shell prefixes are copied and remain subclassable', () => {
   const prefix = ['docker', '--context', 'nas']
@@ -66,7 +44,7 @@ test('Docker and shell prefixes are copied and remain subclassable', () => {
   shell.push('bad')
   expect(transport.getCommand()).toEqual(['docker', '--context', 'nas'])
   expect(transport.shellCommand).toEqual(['sh', '-c'])
-  class CustomRemote extends RemoteContainerTransport {
+  class CustomContainer extends ContainerTransport {
     getCommand() {
       return this.getDockerBaseCommand()
     }
@@ -74,7 +52,7 @@ test('Docker and shell prefixes are copied and remain subclassable', () => {
       return [...super.getDockerBaseCommand(), '--log-level', 'error']
     }
   }
-  expect(new CustomRemote('fixture', 'ssh://nas').getCommand()).toEqual(['docker', '--host', 'ssh://nas', '--log-level', 'error'])
+  expect(new CustomContainer('fixture').getCommand()).toEqual(['docker', '--log-level', 'error'])
   expect(new VisibleContainer('fixture', {dockerCommand: 'C:/Docker Tools/docker.exe'}).getCommand()).toEqual(['C:/Docker Tools/docker.exe'])
 })
 test('container exec preserves literal argv and terminates Docker option parsing', async () => {
@@ -115,34 +93,7 @@ test('shell execution uses the container interpreter, not the caller OS', async 
   const neutralResult = await record(custom, ['tool', 'literal'])
   expect(neutralResult.argv).toEqual(['exec', '--', 'fixture', 'tool', 'literal'])
 })
-for (const endpoint of ['ssh://nas', 'ssh://user@nas:2222/var/run/docker.sock', 'tcp://nas:2375', 'tcp://[::1]:2376', 'unix:///var/run/docker.sock', 'npipe:////./pipe/docker_engine']) {
-  test(`native Docker endpoint is preserved: ${endpoint}`, () => {
-    expect(new VisibleRemoteContainer('fixture', endpoint).getCommand()).toEqual(['docker', '--host', endpoint])
-  })
-}
-for (const [endpoint, host, tls] of [
-  ['http://nas:2375', 'tcp://nas:2375', false],
-  ['http://nas/', 'tcp://nas:80', false],
-  ['http://nas:80', 'tcp://nas:80', false],
-  ['https://docker.example:2376/', 'tcp://docker.example:2376', true],
-  ['https://docker.example', 'tcp://docker.example:443', true],
-  ['https://[::1]:2376', 'tcp://[::1]:2376', true],
-] as const) {
-  test(`HTTP endpoint maps to Docker TCP and explicit TLS policy: ${endpoint}`, () => {
-    expect(new VisibleRemoteContainer('fixture', endpoint).getCommand()).toEqual(['docker', '--host', host, ...tls ? ['--tlsverify'] : ['--tls=false']])
-  })
-}
-test('remote endpoint arguments precede exec and preserve custom CLI prefixes', async () => {
-  const transport = new RemoteContainerTransport({
-    container: 'fixture',
-    endpoint: 'ssh://nas',
-    dockerCommand: [...dockerCommand(), '--log-level', 'error'],
-    user: 'agent',
-  })
-  const result = await record(transport, ['bun', '-'], {stdin: 'console.log(42)'})
-  expect(result.argv).toEqual(['--log-level', 'error', '--host', 'ssh://nas', 'exec', '--interactive', '--user', 'agent', '--', 'fixture', 'bun', '-'])
-})
-test('invalid identifiers, command prefixes and unsupported HTTP URL features fail early', () => {
+test('invalid identifiers and command prefixes fail early', () => {
   for (const container of ['', '  ', 'bad\0id']) {
     expect(() => new ContainerTransport(container)).toThrow('container')
   }
@@ -150,9 +101,6 @@ test('invalid identifiers, command prefixes and unsupported HTTP URL features fa
     expect(() => new ContainerTransport('fixture', {dockerCommand: command})).toThrow('command')
     expect(() => new ContainerTransport('fixture', {shellCommand: command})).toThrow('command')
     expect(() => createTransport().runShellNeutralCommand(command)).toThrow('command')
-  }
-  for (const endpoint of ['', 'nas', 'ftp://nas', 'ssh://bad\0host', 'http://user:password@nas:2375', 'https://nas/docker', 'http://nas?query=yes', 'http://nas/#fragment']) {
-    expect(() => new RemoteContainerTransport('fixture', endpoint)).toThrow()
   }
 })
 test('container framing strips protocol bytes from results, events and callbacks', async () => {
@@ -248,46 +196,3 @@ test('RemoteTarget command fallback works without a container JavaScript runtime
   expect(JSON.parse(result.stdout!)).toEqual(values)
   expect(target.getDiscovery().runtimes).toEqual([])
 }, 15_000)
-test('HTTP disables inherited Docker TLS per process without mutating caller configuration', () => {
-  const original = {
-    DOCKER_TLS: process.env.DOCKER_TLS,
-    DOCKER_TLS_VERIFY: process.env.DOCKER_TLS_VERIFY,
-  }
-  try {
-    process.env.DOCKER_TLS = '1'
-    process.env.DOCKER_TLS_VERIFY = '1'
-    const http = new VisibleRemoteContainer('fixture', 'http://nas:2375')
-    expect(http.getEnvironment().DOCKER_TLS).toBe('')
-    expect(http.getEnvironment().DOCKER_TLS_VERIFY).toBe('')
-    const pathKey = Object.keys(process.env).find(key => key.toLowerCase() === 'path')!
-    expect(http.getEnvironment()[pathKey]).toBe(process.env[pathKey])
-    expect(process.env.DOCKER_TLS).toBe('1')
-    expect(process.env.DOCKER_TLS_VERIFY).toBe('1')
-    expect(new VisibleContainer('fixture').getEnvironment().DOCKER_TLS_VERIFY).toBe('1')
-    expect(new VisibleRemoteContainer('fixture', 'https://nas:2376').getEnvironment().DOCKER_TLS_VERIFY).toBe('1')
-  } finally {
-    for (const [key, value] of Object.entries(original)) {
-      if (value === undefined) {
-        delete process.env[key]
-      } else {
-        process.env[key] = value
-      }
-    }
-  }
-})
-test('Docker environment overrides reach only the CLI child process', async () => {
-  class ClientEnvironmentContainer extends ContainerTransport {
-    protected override getDockerEnvironment() {
-      return {
-        ...super.getDockerEnvironment(),
-        REMOTE_TARGET_DOCKER_CLIENT_TEST: 'fixture-only',
-      }
-    }
-  }
-  const original = process.env.REMOTE_TARGET_DOCKER_CLIENT_TEST
-  const transport = new ClientEnvironmentContainer('fixture', {dockerCommand: dockerCommand('environment')})
-  const result = await transport.runShellNeutralCommand(['tool'])
-  expect(result.exitCode).toBe(0)
-  expect(result.stdout).toBe('fixture-only')
-  expect(process.env.REMOTE_TARGET_DOCKER_CLIENT_TEST).toBe(original)
-})

@@ -52,11 +52,6 @@ export class ContainerTransport extends TargetTransport {
     return [...this.dockerCommand]
   }
 
-  /** Environment for the local Docker CLI, not for the command inside the container. */
-  protected getDockerEnvironment(): Record<string, string | undefined> {
-    return process.env
-  }
-
   protected runContainer(command: Array<string>, options: TransportCommandOptions): Promise<InvocationResult> {
     validateCommand(command)
     return runProcess([
@@ -67,7 +62,7 @@ export class ContainerTransport extends TargetTransport {
       '--',
       this.container,
       ...command,
-    ], options, this.getDockerEnvironment())
+    ], options)
   }
 
   override runShellCommand(command: string, options: TransportCommandOptions = {}): Promise<InvocationResult> {

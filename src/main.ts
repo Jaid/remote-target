@@ -1,10 +1,10 @@
-import type {DiscoveryInfo, ExecResult, InvocationOptions, RemoteTargetConstructorOptions, RemoteTargetInput, RemoteTargetOptions, RunInput, RunInvocationOptions, RunResult, RuntimeInfo, RuntimeName, SshShell} from './lib/remoteTarget/types.ts'
+import type {DiscoveryInfo, ExecResult, InvocationOptions, RemoteTargetAssumptions, RemoteTargetConstructorOptions, RemoteTargetInput, RemoteTargetOptions, RunInput, RunInvocationOptions, RunResult, RuntimeInfo, RuntimeName, SshShell} from './lib/remoteTarget/types.ts'
 
 import {enforceForwardSlashes} from 'forward-slash-path'
 import optis from 'optis'
 import tinyhand from 'tinyhand'
 
-import {discoverWithoutRuntime, getRuntimeCommand, probeBootstrapRuntime} from './lib/remoteTarget/discovery.ts'
+import {discoverTarget, discoverWithoutRuntime, getRuntimeCommand, probeBootstrapRuntime} from './lib/remoteTarget/discovery.ts'
 import {InvocationDeadline, InvocationTimeoutError} from './lib/remoteTarget/InvocationDeadline.ts'
 import {normalizeRunInput} from './lib/remoteTarget/normalize.ts'
 import {RemoteTargetError} from './lib/remoteTarget/RemoteTargetError.ts'
@@ -33,6 +33,7 @@ const normalizeRuntimeCandidates = (value: Array<RuntimeName> | undefined) => {
   }
   return candidates.length === 0 ? [...supportedRuntimeNames] : candidates
 }
+const getAssumedBootstrapRuntime = (runtimes: Array<RuntimeInfo>) => supportedRuntimeNames.map(name => runtimes.find(runtime => runtime.name === name)).find(runtime => runtime !== undefined)
 const getExecCommandTimeout = (remaining: number | undefined) => {
   if (remaining === undefined) {
     return
@@ -42,11 +43,18 @@ const getExecCommandTimeout = (remaining: number | undefined) => {
 }
 const optionsSchema = optis({
   defaults: {
+    assumptions: {},
     globals: {},
     initializationTimeoutMs: 30_000,
     runtimeCandidates: [...supportedRuntimeNames] as Array<RuntimeName>,
   },
   normalizations: {
+    assumptions: (value: RemoteTargetAssumptions | undefined) => ({
+      ...value,
+      ...value?.os ? {os: {...value.os}} : {},
+      ...value?.runtimes ? {runtimes: value.runtimes.map(runtime => ({...runtime}))} : {},
+      ...value?.shell ? {shell: {...value.shell}} : {},
+    }),
     globals: (value: Record<string, unknown> | undefined) => ({...value}),
     host: (value: string) => value.trim(),
     keyFile: (value: string | undefined) => {
@@ -241,7 +249,37 @@ class RemoteTarget {
 
   private async initialize() {
     const deadline = new InvocationDeadline({timeoutMs: this.options.initializationTimeoutMs})
-    const discovery = await deadline.wait(probeBootstrapRuntime(this.transport, [...supportedRuntimeNames], deadline)) ?? await deadline.wait(discoverWithoutRuntime(this.transport, deadline))
+    const assumptions = this.options.assumptions
+    const assumedShell = assumptions.shell ?? this.transport.getShell()
+    const assumedRuntimes = assumptions.runtimes
+    const assumedBootstrapRuntime = assumedRuntimes ? getAssumedBootstrapRuntime(assumedRuntimes) : undefined
+    const sections = {
+      os: assumptions.os === undefined,
+      runtimes: assumedRuntimes === undefined,
+      shell: assumedShell === undefined,
+    }
+    let discovery: DiscoveryInfo
+    if (!sections.os && !sections.runtimes && !sections.shell) {
+      discovery = {
+        bootstrapRuntime: assumedBootstrapRuntime,
+        os: assumptions.os!,
+        runtimes: assumedRuntimes!,
+        shell: assumedShell!,
+      }
+    } else {
+      let discovered: DiscoveryInfo
+      if (assumedRuntimes !== undefined) {
+        discovered = assumedBootstrapRuntime ? await deadline.wait(discoverTarget(this.transport, assumedBootstrapRuntime, deadline, sections)) : await deadline.wait(discoverWithoutRuntime(this.transport, deadline, sections))
+      } else {
+        discovered = await deadline.wait(probeBootstrapRuntime(this.transport, [...supportedRuntimeNames], deadline, sections)) ?? await deadline.wait(discoverWithoutRuntime(this.transport, deadline, sections))
+      }
+      discovery = {
+        bootstrapRuntime: assumedBootstrapRuntime ?? discovered.bootstrapRuntime,
+        os: assumptions.os ?? discovered.os,
+        runtimes: assumedRuntimes ?? discovered.runtimes,
+        shell: assumedShell ?? discovered.shell,
+      }
+    }
     this.#discovery = discovery
     this.#runtime = this.options.runtimeCandidates.map(name => discovery.runtimes.find(runtime => runtime.name === name)).find(runtime => runtime !== undefined)
     return this
@@ -257,6 +295,4 @@ export type {TransportChunkEvent, TransportChunkListener, TransportChunkStream, 
 export {ContainerTransport} from './lib/transport/ContainerTransport.ts'
 
 export type {ContainerTransportOptions} from './lib/transport/ContainerTransport.ts'
-export {RemoteContainerTransport} from './lib/transport/RemoteContainerTransport.ts'
-export type {RemoteContainerTransportOptions} from './lib/transport/RemoteContainerTransport.ts'
 export type {SshTargetTransportOptions} from './lib/transport/SshTargetTransport.ts'

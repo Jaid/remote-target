@@ -1,4 +1,4 @@
-import type {InvocationResult, RuntimeName, TransportCommandOptions} from '#src/lib/remoteTarget/types.ts'
+import type {InvocationResult, RuntimeInfo, RuntimeName, TransportCommandOptions} from '#src/lib/remoteTarget/types.ts'
 
 import {expect, test} from 'bun:test'
 
@@ -31,6 +31,13 @@ class DelayedTransport extends TargetTransport {
     return this.local.runShellNeutralCommand(command, options)
   }
 }
+class RecordingLocalTransport extends LocalTargetTransport {
+  readonly commands: Array<Array<string>> = []
+  override runShellNeutralCommand(command: Array<string>, options?: TransportCommandOptions) {
+    this.commands.push([...command])
+    return super.runShellNeutralCommand(command, options)
+  }
+}
 class DiscoveryTimeoutTransport extends TargetTransport {
   readonly commands: Array<Array<string>> = []
 
@@ -57,6 +64,66 @@ const createDelayed = () => {
     transport,
   }
 }
+test('complete assumptions skip discovery', async () => {
+  const transport = new RecordingLocalTransport
+  const runtime: RuntimeInfo = {
+    file: process.execPath,
+    name: 'bun',
+  }
+  const target = new RemoteTarget('fixture', {
+    assumptions: {
+      os: {name: 'windows'},
+      runtimes: [runtime],
+      shell: {name: 'powershell'},
+    },
+    runtimeCandidates: ['bun'],
+    transport,
+  })
+  await target.init()
+  expect(transport.commands).toEqual([])
+  expect(target.getRuntime()).toEqual(runtime)
+  expect(target.getDiscovery()).toEqual({
+    bootstrapRuntime: runtime,
+    os: {name: 'windows'},
+    runtimes: [runtime],
+    shell: {name: 'powershell'},
+  })
+})
+test('partial assumptions discover missing pieces without rediscovering assumed runtimes', async () => {
+  const transport = new RecordingLocalTransport
+  const runtime: RuntimeInfo = {
+    file: process.execPath,
+    name: 'bun',
+  }
+  const target = new RemoteTarget('fixture', {
+    assumptions: {runtimes: [runtime]},
+    runtimeCandidates: ['bun'],
+    transport,
+  })
+  await target.init()
+  expect(transport.commands).toEqual([[process.execPath, '-']])
+  expect(target.getDiscovery().runtimes).toEqual([runtime])
+  expect(target.getRuntime()).toEqual(runtime)
+  let expectedOs: 'linux' | 'unknown' | 'windows' = 'unknown'
+  if (process.platform === 'win32') {
+    expectedOs = 'windows'
+  } else if (process.platform === 'linux') {
+    expectedOs = 'linux'
+  }
+  expect(target.getDiscovery().os.name).toBe(expectedOs)
+})
+test('partial assumptions are merged over discovered values', async () => {
+  const transport = new RecordingLocalTransport
+  const target = new RemoteTarget('fixture', {
+    assumptions: {os: {name: 'unknown'}},
+    runtimeCandidates: ['bun'],
+    transport,
+  })
+  await target.init()
+  expect(transport.commands.length).toBeGreaterThan(0)
+  expect(target.getDiscovery().os).toEqual({name: 'unknown'})
+  expect(target.getRuntime().name).toBe('bun')
+})
 test('already-aborted run, exec and init calls do not start discovery', async () => {
   const {target, transport} = createDelayed()
   const controller = new AbortController

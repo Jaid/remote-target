@@ -4,8 +4,6 @@ import {readFileSync} from 'node:fs'
 const [mode, ...argv] = process.argv.slice(2)
 if (mode === 'record') {
   process.stdout.write(JSON.stringify({argv, stdin: readFileSync(0, 'utf8')}))
-} else if (mode === 'environment') {
-  process.stdout.write(process.env.REMOTE_TARGET_DOCKER_CLIENT_TEST ?? '')
 } else if (mode === 'wait') {
   process.stdout.write('ready')
   setInterval(() => {}, 1000)

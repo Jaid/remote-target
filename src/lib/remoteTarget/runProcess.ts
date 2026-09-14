@@ -1,7 +1,7 @@
 import type {InvocationResult, ProcessFailure, TransportCommandOptions} from './types.ts'
 
 // All runtime dependencies belong inside this function: the same implementation is embedded in remote wrappers.
-export async function runProcess(command: Array<string>, options: TransportCommandOptions = {}, environment?: Record<string, string | undefined>): Promise<InvocationResult> {
+export async function runProcess(command: Array<string>, options: TransportCommandOptions = {}): Promise<InvocationResult> {
   const startedAt = performance.now()
   options.signal?.throwIfAborted()
   const [file, ...args] = command
@@ -29,10 +29,7 @@ export async function runProcess(command: Array<string>, options: TransportComma
   const {Buffer} = await import('node:buffer')
   options.signal?.throwIfAborted()
   return new Promise<InvocationResult>((resolve, reject) => {
-    const child = spawn(file, args, {
-      env: environment,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
+    const child = spawn(file, args, {stdio: ['pipe', 'pipe', 'pipe']})
     const stdoutChunks: Array<Buffer> = []
     const stderrChunks: Array<Buffer> = []
     const diagnostics: Array<string> = []

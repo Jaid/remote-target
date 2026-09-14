@@ -48,6 +48,8 @@ export type DiscoveryInfo = {
   shell: ShellInfo
 }
 
+export type RemoteTargetAssumptions = Partial<Pick<DiscoveryInfo, 'os' | 'runtimes' | 'shell'>>
+
 export type RunResult = InvocationResult & {
   exports?: Record<string, unknown>
   inputCode: string
@@ -57,6 +59,7 @@ export type RunResult = InvocationResult & {
 }
 
 export type RemoteTargetOptions = {
+  assumptions: RemoteTargetAssumptions
   globals: Record<string, unknown>
   host: string
   initializationTimeoutMs: number
