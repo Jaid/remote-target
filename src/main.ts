@@ -33,7 +33,7 @@ const normalizeRuntimeCandidates = (value: Array<RuntimeName> | undefined) => {
   }
   return candidates.length === 0 ? [...supportedRuntimeNames] : candidates
 }
-const getAssumedBootstrapRuntime = (runtimes: Array<RuntimeInfo>) => supportedRuntimeNames.map(name => runtimes.find(runtime => runtime.name === name)).find(runtime => runtime !== undefined)
+const getAssumedBootstrapRuntime = (runtimes: Array<RuntimeInfo>, candidates: Array<RuntimeName>) => candidates.map(name => runtimes.find(runtime => runtime.name === name)).find(runtime => runtime !== undefined)
 const getExecCommandTimeout = (remaining: number | undefined) => {
   if (remaining === undefined) {
     return
@@ -252,7 +252,7 @@ class RemoteTarget {
     const assumptions = this.options.assumptions
     const assumedShell = assumptions.shell ?? this.transport.getShell()
     const assumedRuntimes = assumptions.runtimes
-    const assumedBootstrapRuntime = assumedRuntimes ? getAssumedBootstrapRuntime(assumedRuntimes) : undefined
+    const assumedBootstrapRuntime = assumedRuntimes ? getAssumedBootstrapRuntime(assumedRuntimes, this.options.runtimeCandidates) : undefined
     const sections = {
       os: assumptions.os === undefined,
       runtimes: assumedRuntimes === undefined,
@@ -269,9 +269,9 @@ class RemoteTarget {
     } else {
       let discovered: DiscoveryInfo
       if (assumedRuntimes !== undefined) {
-        discovered = assumedBootstrapRuntime ? await deadline.wait(discoverTarget(this.transport, assumedBootstrapRuntime, deadline, sections)) : await deadline.wait(discoverWithoutRuntime(this.transport, deadline, sections))
+        discovered = assumedBootstrapRuntime ? await deadline.wait(discoverTarget(this.transport, assumedBootstrapRuntime, this.options.runtimeCandidates, deadline, sections)) : await deadline.wait(discoverWithoutRuntime(this.transport, deadline, sections))
       } else {
-        discovered = await deadline.wait(probeBootstrapRuntime(this.transport, [...supportedRuntimeNames], deadline, sections)) ?? await deadline.wait(discoverWithoutRuntime(this.transport, deadline, sections))
+        discovered = await deadline.wait(probeBootstrapRuntime(this.transport, this.options.runtimeCandidates, deadline, sections)) ?? await deadline.wait(discoverWithoutRuntime(this.transport, deadline, sections))
       }
       discovery = {
         bootstrapRuntime: assumedBootstrapRuntime ?? discovered.bootstrapRuntime,

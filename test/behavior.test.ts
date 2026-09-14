@@ -64,6 +64,43 @@ const createDelayed = () => {
     transport,
   }
 }
+test('runtimeCandidates constrain bootstrap probing and discovered runtimes', async () => {
+  const transport = new RecordingLocalTransport
+  const target = new RemoteTarget('fixture', {
+    runtimeCandidates: ['node'],
+    transport,
+  })
+  await target.init()
+  expect(transport.commands[0]).toEqual(['node', '--version'])
+  expect(transport.commands.some(command => command[0] === 'bun' && command[1] === '--version')).toBe(false)
+  expect(target.getDiscovery().bootstrapRuntime?.name).toBe('node')
+  expect(target.getDiscovery().runtimes.map(runtime => runtime.name)).toEqual(['node'])
+  expect(target.getRuntime().name).toBe('node')
+})
+test('assumed bootstrap runtime follows runtimeCandidates order', async () => {
+  const transport = new RecordingLocalTransport
+  const target = new RemoteTarget('fixture', {
+    assumptions: {
+      os: {name: 'unknown'},
+      runtimes: [
+        {
+          file: process.execPath,
+          name: 'bun',
+        },
+        {
+          file: 'node',
+          name: 'node',
+        },
+      ],
+    },
+    runtimeCandidates: ['node'],
+    transport,
+  })
+  await target.init()
+  expect(transport.commands[0]).toEqual(['node', '--input-type=module', '-'])
+  expect(target.getDiscovery().bootstrapRuntime?.name).toBe('node')
+  expect(target.getRuntime().name).toBe('node')
+})
 test('complete assumptions skip discovery', async () => {
   const transport = new RecordingLocalTransport
   const runtime: RuntimeInfo = {

@@ -13,7 +13,7 @@ type DiscoverySections = {
 }
 
 // Embedded remotely; all runtime dependencies and helper state remain inside this function.
-async function collectDiscovery(timeoutMs: number, run: typeof runProcess, sections: DiscoverySections = {}): Promise<Omit<DiscoveryInfo, 'bootstrapRuntime'>> {
+async function collectDiscovery(timeoutMs: number, run: typeof runProcess, runtimeNames: Array<RuntimeName>, sections: DiscoverySections = {}): Promise<Omit<DiscoveryInfo, 'bootstrapRuntime'>> {
   const fs = await import('node:fs')
   const path = await import('node:path')
   const os = await import('node:os')
@@ -27,7 +27,6 @@ async function collectDiscovery(timeoutMs: number, run: typeof runProcess, secti
   const normalizePath = (value: string) => value.replaceAll('\\', '/')
   const runtimes: Array<RuntimeInfo> = []
   if (discoverRuntimes) {
-    const names: Array<RuntimeName> = ['bun', 'node', 'deno']
     let current: RuntimeName = 'node'
     if (typeof Bun === 'object') {
       current = 'bun'
@@ -54,7 +53,7 @@ async function collectDiscovery(timeoutMs: number, run: typeof runProcess, secti
         }
       }
     }
-    for (const name of names) {
+    for (const name of runtimeNames) {
       const file = findExecutable(name)
       if (!file) {
         continue
@@ -172,7 +171,7 @@ const isDiscoveryInfo = (value: {os?: unknown
   return runtimes.every((runtime: unknown) => isRecord(runtime) && typeof runtime.file === 'string' && ['bun', 'node', 'deno'].includes(String(runtime.name)) && (runtime.version === undefined || typeof runtime.version === 'string'))
 }
 
-export const discoverTarget = async (transport: TargetTransport, bootstrapRuntime: RuntimeInfo, deadline = new InvocationDeadline({timeoutMs: 30_000}), sections: DiscoverySections = {}): Promise<DiscoveryInfo> => {
+export const discoverTarget = async (transport: TargetTransport, bootstrapRuntime: RuntimeInfo, runtimeNames: Array<RuntimeName> = ['bun', 'node', 'deno'], deadline = new InvocationDeadline({timeoutMs: 30_000}), sections: DiscoverySections = {}): Promise<DiscoveryInfo> => {
   const frame = new ResultFrame(65_536)
   const result = await transport.runShellNeutralCommand(getRuntimeCommand(bootstrapRuntime), {
     ...deadline.options(),
@@ -181,7 +180,7 @@ export const discoverTarget = async (transport: TargetTransport, bootstrapRuntim
     requireStdinDelivery: true,
     stdin: `const run = ${runProcess.toString()}
 const collect = ${collectDiscovery.toString()}
-console.log(${JSON.stringify(frame.marker)} + JSON.stringify({ok: true, ...await collect(${deadline.remaining() ?? 30_000}, run, ${JSON.stringify(sections)})}))`,
+console.log(${JSON.stringify(frame.marker)} + JSON.stringify({ok: true, ...await collect(${deadline.remaining() ?? 30_000}, run, ${JSON.stringify(runtimeNames)}, ${JSON.stringify(sections)})}))`,
   })
   const raw = frame.read<{ok: boolean
     os?: unknown
@@ -256,6 +255,6 @@ export const probeBootstrapRuntime = async (transport: TargetTransport, runtimeN
       version: name === 'deno' ? version.stdout?.trim().split(/\r?\n/u)[0]?.replace(/^deno /u, '') : version.stdout?.trim().split(/\r?\n/u)[0],
     }
     // A runtime that starts but cannot execute discovery is not an absent runtime.
-    return discoverTarget(transport, runtime, deadline, sections)
+    return discoverTarget(transport, runtime, runtimeNames, deadline, sections)
   }
 }
