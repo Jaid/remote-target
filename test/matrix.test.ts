@@ -245,10 +245,10 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*`
   }
   if (baseCase.kind === 'arch') {
-    return String.raw`ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    return `ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN pacman -Syyu --noconfirm --needed ca-certificates dropbear gcc-libs procps-ng which`
   }
-  return String.raw`ENV PATH=/usr/local/bin:/root/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/default/sbin:/usr/bin:/bin
+  return `ENV PATH=/usr/local/bin:/root/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/default/sbin:/usr/bin:/bin
 RUN nix-env -iA nixpkgs.dropbear nixpkgs.gcc.cc.lib nixpkgs.glibc nixpkgs.nix-ld nixpkgs.procps`
 }
 const getRuntimeSetupStep = (baseCase: BaseCase, runtimeCase: RuntimeCase) => {

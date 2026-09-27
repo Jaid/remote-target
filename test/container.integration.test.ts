@@ -91,13 +91,13 @@ integration('real Docker container transport', () => {
     })
   }, 15_000)
   test('direct exec preserves complex argv without a shell', async () => {
-    const values = ['', 'two words', "a'b", '"quoted"', '$HOME', '%PATH%', '\u0060tick\u0060', 'line\nbreak', 'a\\', 'x; echo INJECTED', '\u2192\u{1F9D9}', '--user=root']
+    const values = ['', 'two words', "a'b", '"quoted"', '$HOME', '%PATH%', '\u{60}tick\u{60}', 'line\nbreak', 'a\\', 'x; echo INJECTED', '\u{2192}\u{1F9D9}', '--user=root']
     const result = await transport.runShellNeutralCommand(['bun', '--eval', 'console.log(JSON.stringify(Bun.argv.slice(1)))', ...values], {timeoutMs: 10_000})
     expect(result.exitCode).toBe(0)
     expect(JSON.parse(result.stdout!)).toEqual(values)
   }, 15_000)
   test('stdin round trips NUL, Unicode and empty input without a TTY', async () => {
-    for (const stdin of ['', 'NUL\0\u2192\u{1F9D9}\n'.repeat(20_000)]) {
+    for (const stdin of ['', 'NUL\0\u{2192}\u{1F9D9}\n'.repeat(20_000)]) {
       const result = await transport.runShellNeutralCommand(['cat'], {
         stdin,
         requireStdinDelivery: true,
@@ -128,7 +128,8 @@ integration('real Docker container transport', () => {
       onStderrChunk: chunk => stderr.push(chunk),
     })
     await Promise.race([
-      ready.promise, invocation.then(() => {
+      ready.promise,
+      invocation.then(() => {
         throw new Error('Execution finished before streaming output.')
       }),
     ])

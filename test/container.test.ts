@@ -14,8 +14,10 @@ const createTransport = (mode = 'record', options: Omit<ContainerTransportOption
 const record = async (transport: ContainerTransport, command: Array<string>, options?: TransportCommandOptions) => {
   const result = await transport.runShellNeutralCommand(command, options)
   expect(result.exitCode).toBe(0)
-  return JSON.parse(result.stdout!) as {argv: Array<string>
-    stdin: string}
+  return JSON.parse(result.stdout!) as {
+    argv: Array<string>
+    stdin: string
+  }
 }
 class VisibleContainer extends ContainerTransport {
   getCommand() {
@@ -56,7 +58,7 @@ test('Docker and shell prefixes are copied and remain subclassable', () => {
   expect(new VisibleContainer('fixture', {dockerCommand: 'C:/Docker Tools/docker.exe'}).getCommand()).toEqual(['C:/Docker Tools/docker.exe'])
 })
 test('container exec preserves literal argv and terminates Docker option parsing', async () => {
-  const command = ['tool with spaces', '', 'two words', "a'b", '"quoted"', '$HOME', '%PATH%', '\u0060tick\u0060', 'x; echo INJECTED', 'line\nbreak', 'trailing\\', '\u2192\u{1F9D9}', '--user=root']
+  const command = ['tool with spaces', '', 'two words', "a'b", '"quoted"', '$HOME', '%PATH%', '\u{60}tick\u{60}', 'x; echo INJECTED', 'line\nbreak', 'trailing\\', '\u{2192}\u{1F9D9}', '--user=root']
   const transport = new ContainerTransport('-not-a-docker-option', {
     dockerCommand: dockerCommand(),
     user: '1000:1000',
@@ -67,7 +69,7 @@ test('container exec preserves literal argv and terminates Docker option parsing
   expect(result.argv).not.toContain('--tty')
   expect(result.stdin).toBe('')
 })
-for (const stdin of ['', 'hello\nworld', 'NUL\0allowed', '\u2192\u{1F9D9}'.repeat(30_000)]) {
+for (const stdin of ['', 'hello\nworld', 'NUL\0allowed', '\u{2192}\u{1F9D9}'.repeat(30_000)]) {
   test(`stdin enables interactive mode, including empty input (${stdin.length} characters)`, async () => {
     const result = await record(createTransport(), ['bun', '-'], {
       stdin,
@@ -190,7 +192,7 @@ test('RemoteTarget discovers runtimes, runs stdin programs and executes through 
 }, 15_000)
 test('RemoteTarget command fallback works without a container JavaScript runtime', async () => {
   const target = new RemoteTarget('minimal-container', {transport: new ContainerTransport('no-runtime', {dockerCommand: dockerCommand('execute')})})
-  const values = ['', 'two words', '$HOME', '\u2192\u{1F9D9}']
+  const values = ['', 'two words', '$HOME', '\u{2192}\u{1F9D9}']
   const result = await target.exec([process.execPath, '--eval', 'console.log(JSON.stringify(Bun.argv.slice(1)))', ...values])
   expect(result.exitCode).toBe(0)
   expect(JSON.parse(result.stdout!)).toEqual(values)

@@ -3,8 +3,10 @@ import type {InvocationResult, ProcessFailure, TransportCommandOptions} from './
 import {RemoteTargetError} from './RemoteTargetError.ts'
 import {deserializeTransportValue} from './serialize.ts'
 
-type Payload = {error?: unknown
-  ok: boolean}
+type Payload = {
+  error?: unknown
+  ok: boolean
+}
 
 export const isInvocationResult = (value: unknown): value is InvocationResult => {
   if (!value || typeof value !== 'object') {

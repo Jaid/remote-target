@@ -200,7 +200,7 @@ export async function runProcess(command: Array<string>, options: TransportComma
     })
     child.stdin.on('error', (error: NodeJS.ErrnoException) => {
       // Closing unused stdin is normal for ordinary commands, but not for a generated program that must be delivered.
-      if (!options.requireStdinDelivery && ['EPIPE', 'EOF', 'ECONNRESET'].includes(error.code ?? '')) {
+      if (!options.requireStdinDelivery && ['ECONNRESET', 'EOF', 'EPIPE'].includes(error.code ?? '')) {
         return
       }
       terminate(1, `Failed to deliver stdin: ${String(error)}`, 'stdin', error.code)

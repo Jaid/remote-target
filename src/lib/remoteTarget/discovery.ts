@@ -152,14 +152,16 @@ export const getRuntimeCommand = (runtime: RuntimeInfo | RuntimeName) => {
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
-const isDiscoveryInfo = (value: {os?: unknown
+const isDiscoveryInfo = (value: {
+  os?: unknown
   runtimes?: unknown
-  shell?: unknown}): value is Omit<DiscoveryInfo, 'bootstrapRuntime'> => {
+  shell?: unknown
+}): value is Omit<DiscoveryInfo, 'bootstrapRuntime'> => {
   if (!isRecord(value.os) || !isRecord(value.shell) || !Array.isArray(value.runtimes)) {
     return false
   }
   const {os, shell, runtimes} = value
-  if (!['linux', 'windows', 'unknown'].includes(String(os.name)) || os.release !== undefined && typeof os.release !== 'string') {
+  if (!['linux', 'unknown', 'windows'].includes(String(os.name)) || os.release !== undefined && typeof os.release !== 'string') {
     return false
   }
   if (os.name === 'linux' && !['arch', 'debian', 'nixos', 'unknown'].includes(String(os.distribution))) {
@@ -168,7 +170,7 @@ const isDiscoveryInfo = (value: {os?: unknown
   if (!['bash', 'cmd', 'fish', 'powershell', 'sh', 'unknown', 'zsh'].includes(String(shell.name)) || shell.file !== undefined && typeof shell.file !== 'string') {
     return false
   }
-  return runtimes.every((runtime: unknown) => isRecord(runtime) && typeof runtime.file === 'string' && ['bun', 'node', 'deno'].includes(String(runtime.name)) && (runtime.version === undefined || typeof runtime.version === 'string'))
+  return runtimes.every((runtime: unknown) => isRecord(runtime) && typeof runtime.file === 'string' && ['bun', 'deno', 'node'].includes(String(runtime.name)) && (runtime.version === undefined || typeof runtime.version === 'string'))
 }
 
 export const discoverTarget = async (transport: TargetTransport, bootstrapRuntime: RuntimeInfo, runtimeNames: Array<RuntimeName> = ['bun', 'node', 'deno'], deadline = new InvocationDeadline({timeoutMs: 30_000}), sections: DiscoverySections = {}): Promise<DiscoveryInfo> => {
@@ -182,10 +184,12 @@ export const discoverTarget = async (transport: TargetTransport, bootstrapRuntim
 const collect = ${collectDiscovery.toString()}
 console.log(${JSON.stringify(frame.marker)} + JSON.stringify({ok: true, ...await collect(${deadline.remaining() ?? 30_000}, run, ${JSON.stringify(runtimeNames)}, ${JSON.stringify(sections)})}))`,
   })
-  const raw = frame.read<{ok: boolean
+  const raw = frame.read<{
+    ok: boolean
     os?: unknown
     runtimes?: unknown
-    shell?: unknown}>(result, `Failed to discover target details using ${bootstrapRuntime.name}.`)
+    shell?: unknown
+  }>(result, `Failed to discover target details using ${bootstrapRuntime.name}.`)
   if (!isDiscoveryInfo(raw)) {
     throw new RemoteTargetError('Invalid discovery payload.', result)
   }

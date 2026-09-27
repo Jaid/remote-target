@@ -22,7 +22,7 @@ class ShellTransport extends SshTargetTransport {
     return this.getSshBaseCommand()
   }
   override async runShellNeutralCommand(command: Array<string>, options?: TransportCommandOptions): Promise<InvocationResult> {
-    if (this.noRuntime && ['bun', 'node', 'deno'].includes(command[0]) && command[1] === '--version') {
+    if (this.noRuntime && ['bun', 'deno', 'node'].includes(command[0]) && command[1] === '--version') {
       return {
         duration: 0,
         exitCode: 127,
@@ -62,9 +62,11 @@ test('shell encoding rejects NUL and an empty executable', () => {
   }
 })
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'sh'
-const shells: Array<{name: SshShell
+const shells: Array<{
+  name: SshShell
   prefix: Array<string>
-  probe: Array<string>}> = [
+  probe: Array<string>
+}> = [
   {
     name: 'posix',
     prefix: [bash, '-c'],
@@ -100,7 +102,7 @@ for (const shell of shells) {
       if (process.platform !== 'win32') {
         await fs.chmod(file, 0o700)
       }
-      const values = ['', 'hello world', "a'b", 'Don\u2019t', '"quoted"', '$HOME', '%PATH%', '\u0060tick\u0060', 'line\nbreak', 'x; echo INJECTED', '\u2192\u{1F9D9}']
+      const values = ['', 'hello world', "a'b", 'Don\u{2019}t', '"quoted"', '$HOME', '%PATH%', '\u{60}tick\u{60}', 'line\nbreak', 'x; echo INJECTED', '\u{2192}\u{1F9D9}']
       if (shell.name === 'fish') {
         values.push('\\', 'a\\', 'a\\b\\', "'", String.raw`\'`, '\\\\')
       }
@@ -123,9 +125,9 @@ for (const shell of shells) {
     const transport = new ShellTransport(shell.prefix)
     transport.noRuntime = true
     const target = new RemoteTarget('fixture', {transport})
-    const result = await target.exec([process.execPath, '--eval', 'console.log(JSON.stringify(Bun.argv.slice(1)))', '', 'two words', "a'b", '\u2019'], {timeoutMs: 10_000})
+    const result = await target.exec([process.execPath, '--eval', 'console.log(JSON.stringify(Bun.argv.slice(1)))', '', 'two words', "a'b", '\u{2019}'], {timeoutMs: 10_000})
     expect(result.exitCode).toBe(0)
-    expect(JSON.parse(result.stdout!)).toEqual(['', 'two words', "a'b", '\u2019'])
+    expect(JSON.parse(result.stdout!)).toEqual(['', 'two words', "a'b", '\u{2019}'])
     expect(target.getDiscovery().runtimes).toEqual([])
   })
 }

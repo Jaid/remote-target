@@ -279,10 +279,12 @@ test('Float16Array support is capability-aware', () => {
 })
 test('cycles, functions and shared-reference identity remain deliberately lossy', () => {
   const shared = {value: 1}
-  const input: {a: typeof shared
+  const input: {
+    a: typeof shared
     b: typeof shared
     fn: () => void
-    self?: unknown} = {
+    self?: unknown
+  } = {
     a: shared,
     b: shared,
     fn: () => {},
@@ -303,10 +305,12 @@ for (const runtime of ['bun', 'node', 'deno'] as const satisfies Array<RuntimeNa
   test.skipIf(!available)(`${runtime}: run output budgets exclude structured results`, async () => {
     const target = new RemoteTarget('local', {runtimeCandidates: [runtime]})
     const result = await target.run('import {Buffer} from "node:buffer"; return {buffer: Buffer.from("hello"), zero: -0, sparse: Array(2), nested: new Map([["a", new Set([1])]])}', {maxOutputBytes: 0})
-    const value = result.returnValue as {buffer: Buffer
+    const value = result.returnValue as {
+      buffer: Buffer
       nested: Map<string, Set<number>>
       sparse: Array<unknown>
-      zero: number}
+      zero: number
+    }
     expect(value.buffer.toString()).toBe('hello')
     expect(Object.is(value.zero, -0)).toBe(true)
     expect(0 in value.sparse).toBe(false)
@@ -367,7 +371,7 @@ for (const runtime of ['bun', 'node', 'deno'] as const satisfies Array<RuntimeNa
   test.skipIf(!available)(`${runtime}: generated exec uses the shared stdin-safe process runner`, async () => {
     const frame = new ResultFrame(1_000_000)
     const wrapper = buildExecWrapper(['node', '--eval', 'process.stdin.pipe(process.stdout)'], frame.marker, {
-      stdin: 'hello\0\u2192',
+      stdin: 'hello\0\u{2192}',
       timeoutMs: 2000,
     })
     const invocation = await runProcess(getRuntimeCommand(runtime), {
@@ -375,11 +379,15 @@ for (const runtime of ['bun', 'node', 'deno'] as const satisfies Array<RuntimeNa
       stdin: wrapper,
       timeoutMs: 5000,
     })
-    const payload = frame.read<{ok: boolean
-      result: {exitCode: number
-        stdout: string}}>(invocation, 'Generated exec failed.')
+    const payload = frame.read<{
+      ok: boolean
+      result: {
+        exitCode: number
+        stdout: string
+      }
+    }>(invocation, 'Generated exec failed.')
     expect(payload.result.exitCode).toBe(0)
-    expect(payload.result.stdout).toBe('hello\0\u2192')
+    expect(payload.result.stdout).toBe('hello\0\u{2192}')
   })
 }
 class SyntheticTransport extends TargetTransport {
@@ -428,10 +436,12 @@ test('constructor accepts independent and built-in-derived transports', async ()
 })
 test('transport chunk events and per-invocation callbacks identify concurrent-safe invocations', async () => {
   const transport = new SyntheticTransport
-  const events: Array<{command: ReadonlyArray<string> | string
+  const events: Array<{
+    command: ReadonlyArray<string> | string
     invocationId: string
     stream: string
-    text: string}> = []
+    text: string
+  }> = []
   const callbackChunks: Array<string> = []
   const unsubscribeStdout = transport.on('stdout', event => {
     events.push({
@@ -473,9 +483,11 @@ test('runtime-backed exec exposes live command stdout and stderr chunks', async 
   await target.init()
   const callbackStdout: Array<Buffer> = []
   const callbackStderr: Array<Buffer> = []
-  const events: Array<{id: string
+  const events: Array<{
+    id: string
     stream: string
-    text: string}> = []
+    text: string
+  }> = []
   const offStdout = transport.on('stdout', event => {
     events.push({
       id: event.invocationId,

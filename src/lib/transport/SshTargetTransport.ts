@@ -28,8 +28,8 @@ export class SshTargetTransport extends TargetTransport {
     this.keyFile = options.keyFile
     this.port = options.port
     this.user = options.user
-    if (options.sshShell !== undefined && !['posix', 'powershell', 'fish', 'cmd'].includes(options.sshShell)) {
-      throw new TypeError(`Unsupported SSH shell: ${String(options.sshShell)}`)
+    if (options.sshShell !== undefined && !['cmd', 'fish', 'posix', 'powershell'].includes(options.sshShell)) {
+      throw new TypeError(`Unsupported SSH shell: ${options.sshShell}`)
     }
     this.#shell = options.sshShell
   }

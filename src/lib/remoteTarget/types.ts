@@ -9,21 +9,31 @@ export type ShellName = 'bash' | 'cmd' | 'fish' | 'powershell' | 'sh' | 'unknown
 
 export type LinuxDistribution = 'arch' | 'debian' | 'nixos' | 'unknown'
 
-export type OsInfo
-  = | {distribution: LinuxDistribution
+export type OsInfo =
+  | {
+    distribution: LinuxDistribution
     name: 'linux'
-    release?: string}
-    | {name: 'unknown'
-      release?: string}
-    | {name: 'windows'
-      release?: string}
+    release?: string
+  }
+    | {
+      name: 'unknown'
+      release?: string
+    }
+    | {
+      name: 'windows'
+      release?: string
+    }
 
-export type ShellInfo = {file?: string
-  name: ShellName}
+export type ShellInfo = {
+  file?: string
+  name: ShellName
+}
 
 export type ProcessFailure = 'output-limit' | 'protocol' | 'signal' | 'spawn' | 'stdin' | 'stream' | 'timeout'
-export type InvocationControls = {signal?: AbortSignal
-  timeoutMs?: number}
+export type InvocationControls = {
+  signal?: AbortSignal
+  timeoutMs?: number
+}
 
 export type InvocationResult = {
   duration: number
@@ -37,9 +47,11 @@ export type InvocationResult = {
 
 export type ExecResult = InvocationResult & {command: Array<string>}
 
-export type RuntimeInfo = {file: string
+export type RuntimeInfo = {
+  file: string
   name: RuntimeName
-  version?: string}
+  version?: string
+}
 
 export type DiscoveryInfo = {
   bootstrapRuntime?: RuntimeInfo

@@ -1,4 +1,5 @@
 import type {DiscoveryInfo, ExecResult, InvocationOptions, RemoteTargetAssumptions, RemoteTargetConstructorOptions, RemoteTargetInput, RemoteTargetOptions, RunInput, RunInvocationOptions, RunResult, RuntimeInfo, RuntimeName, SshShell} from './lib/remoteTarget/types.ts'
+import type {TargetTransport} from './lib/transport/base/TargetTransport.ts'
 
 import {enforceForwardSlashes} from 'forward-slash-path'
 import optis from 'optis'
@@ -11,25 +12,28 @@ import {RemoteTargetError} from './lib/remoteTarget/RemoteTargetError.ts'
 import {isInvocationResult, ResultFrame} from './lib/remoteTarget/ResultFrame.ts'
 import {deserializeTransportValue} from './lib/remoteTarget/serialize.ts'
 import {buildExecWrapper, buildRunWrapper} from './lib/remoteTarget/wrappers.ts'
-import {TargetTransport} from './lib/transport/base/TargetTransport.ts'
 import {LocalTargetTransport} from './lib/transport/LocalTargetTransport.ts'
 import {SshTargetTransport} from './lib/transport/SshTargetTransport.ts'
 
 const supportedRuntimeNames = ['bun', 'node', 'deno'] as const satisfies Array<RuntimeName>
 
-type RunPayload = {error?: unknown
+type RunPayload = {
+  error?: unknown
   exports?: unknown
   ok: boolean
-  returnValue?: unknown}
-type ExecPayload = {error?: unknown
+  returnValue?: unknown
+}
+type ExecPayload = {
+  error?: unknown
   ok: boolean
-  result?: unknown}
+  result?: unknown
+}
 
 const normalizeRuntimeCandidates = (value: Array<RuntimeName> | undefined) => {
   const candidates = [...new Set(value ?? supportedRuntimeNames)]
   const invalid = candidates.find(candidate => !supportedRuntimeNames.includes(candidate))
   if (invalid) {
-    throw new Error(`Unsupported runtime candidate: ${String(invalid)}`)
+    throw new Error(`Unsupported runtime candidate: ${invalid}`)
   }
   return candidates.length === 0 ? [...supportedRuntimeNames] : candidates
 }
@@ -288,11 +292,15 @@ class RemoteTarget {
 
 export default RemoteTarget
 export {RemoteTargetError} from './lib/remoteTarget/RemoteTargetError.ts'
-export {LocalTargetTransport, SshTargetTransport, TargetTransport}
+
 export type * from './lib/remoteTarget/types.ts'
 export type {TransportChunkEvent, TransportChunkListener, TransportChunkStream, TransportCommand} from './lib/transport/base/TargetTransport.ts'
 
-export {ContainerTransport} from './lib/transport/ContainerTransport.ts'
+export {TargetTransport} from './lib/transport/base/TargetTransport.ts'
 
+export {ContainerTransport} from './lib/transport/ContainerTransport.ts'
 export type {ContainerTransportOptions} from './lib/transport/ContainerTransport.ts'
+
+export {LocalTargetTransport} from './lib/transport/LocalTargetTransport.ts'
 export type {SshTargetTransportOptions} from './lib/transport/SshTargetTransport.ts'
+export {SshTargetTransport} from './lib/transport/SshTargetTransport.ts'

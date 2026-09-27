@@ -9,8 +9,10 @@ import {toJavaScriptLiteral} from './toJavaScriptLiteral.ts'
 
 const parserPlugins = ['decorators-legacy', 'jsx', 'typescript'] as const
 const largeSourceCompactThreshold = 500_000
-const getExportedName = (node: {name?: string
-  value?: unknown}) => {
+const getExportedName = (node: {
+  name?: string
+  value?: unknown
+}) => {
   if (typeof node.name === 'string') {
     return node.name
   }
@@ -142,7 +144,7 @@ const createNormalizationPlugin = (options: {
           invocationStatement,
         ]
         // The cloned program forces Babel to validate the rewritten body before later transforms.
-        void probeProgram
+        probeProgram
       },
     },
   })
@@ -181,7 +183,8 @@ const ${jsxFactoryName} = (type, props, ...children) => {
         state: rewriteState,
       }),
       [
-        transformTypeScript, {
+        transformTypeScript,
+        {
           allowNamespaces: true,
           jsxPragma: jsxFactoryName,
           jsxPragmaFrag: jsxFragmentName,
@@ -190,7 +193,8 @@ const ${jsxFactoryName} = (type, props, ...children) => {
         },
       ],
       [
-        transformReactJsx, {
+        transformReactJsx,
+        {
           pragma: jsxFactoryName,
           pragmaFrag: jsxFragmentName,
           runtime: 'classic',

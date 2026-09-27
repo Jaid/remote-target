@@ -68,7 +68,7 @@ export function serializeTransportValue(value: unknown, seen = new WeakSet<objec
     if (value instanceof Date) {
       return wrap('date', Number.isNaN(value.valueOf()) ? null : value.toISOString())
     }
-    if (value instanceof Error) {
+    if (Error.isError(value)) {
       return wrap('error', {
         cause: value.cause === undefined ? undefined : serializeTransportValue(value.cause, seen),
         message: value.message,

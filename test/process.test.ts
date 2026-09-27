@@ -38,8 +38,10 @@ for (const runtime of ['bun', 'node', 'deno'] as const) {
       requireStdinDelivery: true,
       timeoutMs: 5000,
     })
-    const payload = frame.read<{ok: boolean
-      result: InvocationResult}>(result, 'Generated exec failed.')
+    const payload = frame.read<{
+      ok: boolean
+      result: InvocationResult
+    }>(result, 'Generated exec failed.')
     expect(payload.result.exitCode).toBe(0)
   }, 10_000)
 }
@@ -75,7 +77,7 @@ for (const caller of ['bun', 'node'] as const) {
   }, 10_000)
 }
 test('stdin preserves bytes and UTF-8 across an actual child process', async () => {
-  const input = 'hello\0\r\n\u2192\u{1F9D9}'.repeat(10_000)
+  const input = 'hello\0\r\n\u{2192}\u{1F9D9}'.repeat(10_000)
   const result = await runProcess(['node', '--eval', 'const chunks=[]; process.stdin.on("data", chunk => chunks.push(chunk)); process.stdin.on("end", () => process.stdout.write(Buffer.concat(chunks)))'], {
     stdin: input,
     timeoutMs: 5000,
@@ -139,20 +141,22 @@ test('framing handles split markers and UTF-8 separately from user output', asyn
   const frame = new ResultFrame(1000)
   const payload = {
     ok: true,
-    value: '\u2192\u{1F9D9}',
+    value: '\u{2192}\u{1F9D9}',
   }
-  const output = `before\u2192${frame.marker}${JSON.stringify(payload)}\nafter`
+  const output = `before\u{2192}${frame.marker}${JSON.stringify(payload)}\nafter`
   const source = `for (const byte of Buffer.from(${JSON.stringify(output)})) { process.stdout.write(Buffer.from([byte])); await new Promise(resolve => setTimeout(resolve, 1)) }`
   const result = await runProcess(node, {
     frame: frame.options(),
     stdin: source,
     timeoutMs: 5000,
-    maxOutputBytes: Buffer.byteLength('before\u2192after'),
+    maxOutputBytes: Buffer.byteLength('before\u{2192}after'),
   })
   expect(result.exitCode).toBe(0)
-  expect(result.stdout).toBe('before\u2192after')
-  expect(frame.read<{ok: boolean
-    value: string}>(result, 'Framing failed.')).toEqual(payload)
+  expect(result.stdout).toBe('before\u{2192}after')
+  expect(frame.read<{
+    ok: boolean
+    value: string
+  }>(result, 'Framing failed.')).toEqual(payload)
 })
 test('an available error frame survives an output breach in the same chunk', async () => {
   const frame = new ResultFrame(10_000)
@@ -216,7 +220,7 @@ for (const kind of ['missing', 'truncated', 'invalid', 'oversized'] as const) {
   })
 }
 test('raw transport calls keep arbitrary base64 and marker-like stdout unchanged', async () => {
-  const text = `${Buffer.from('Unicode \u2192\u{1F9D9}').toString('base64')}__remoteTargetRun_fake__`
+  const text = `${Buffer.from('Unicode \u{2192}\u{1F9D9}').toString('base64')}__remoteTargetRun_fake__`
   const result = await runProcess(node, {
     stdin: `process.stdout.write(${JSON.stringify(text)})`,
     timeoutMs: 5000,
