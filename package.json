@@ -21,22 +21,22 @@
     "test:container": "bun test test/container.test.ts test/container.integration.test.ts --max-concurrency 1"
   },
   "dependencies": {
-    "@babel/core": "8.0.5",
+    "@babel/core": "8.0.6",
     "@babel/plugin-transform-react-jsx": "8.0.1",
     "@babel/plugin-transform-typescript": "8.0.5",
     "escapers": "0.1.0",
     "forward-slash-path": "0.3.0",
     "make-argv": "0.1.0",
-    "optis": "0.1.0",
-    "serialize-javascript": "7.1.1",
+    "optis": "0.3.0",
+    "serialize-javascript": "7.1.2",
     "tinyhand": "0.2.0"
   },
   "devDependencies": {
     "@types/bun": "1.4.2",
     "@types/serialize-javascript": "5.0.4",
-    "eslint": "10.10.0",
-    "eslint-config-jaid": "26.0.0",
-    "fs-extra": "11.4.0",
+    "eslint": "10.11.0",
+    "eslint-config-jaid": "34.0.0",
+    "fs-extra": "11.4.1",
     "make-ssh-keys": "1.0.1",
     "tsconfig-jaid-bun": "16.0.0",
     "typescript": "npm:typescript-classic@6.0.4",
