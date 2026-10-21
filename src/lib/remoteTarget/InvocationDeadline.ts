@@ -51,7 +51,7 @@ export class InvocationDeadline {
 
   async wait<Value>(promise: Promise<Value>): Promise<Value> {
     // Attach a rejection handler even when the deadline expired immediately after the work was started.
-    // eslint-disable-next-line promise/prefer-await-to-then
+
     void promise.catch(() => {})
     this.check()
     const signal = this.#options.signal

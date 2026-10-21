@@ -60,7 +60,7 @@ export async function runProcess(command: Array<string>, options: TransportComma
       }
       if (pending.length > 0) {
         // The lifecycle callbacks are installed only after all helpers are initialized.
-        // eslint-disable-next-line typescript/no-use-before-define
+
         capture(stdoutChunks, pending, options.onStdoutChunk)
         pending = Buffer.alloc(0)
       }
@@ -73,7 +73,6 @@ export async function runProcess(command: Array<string>, options: TransportComma
       for (const timer of timers) {
         clearTimeout(timer)
       }
-      // eslint-disable-next-line typescript/no-use-before-define
       options.signal?.removeEventListener('abort', onAbort)
       child.stdin.destroy()
       child.stdout.destroy()
