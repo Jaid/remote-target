@@ -1,6 +1,10 @@
 import type {SshShell} from '../remoteTarget/types.ts'
 
+import {gzipSync} from 'node:zlib'
+
 import createEscaper, {escapePowershell} from 'escapers'
+
+import {buildDesktopRelay} from './desktopRelay.ts'
 
 export const escapePosix = createEscaper(value => `'${value.replaceAll("'", "'\"'\"'")}'`, items => items.join(' '))
 const escapeFishCodePoint = (value: string) => {
@@ -24,7 +28,12 @@ export const escapeFish = createEscaper(value => {
   return value.length === 0 ? "''" : [...value].map(escapeFishCodePoint).join('')
 }, items => items.join(' '))
 
-export const encodeShellCommand = (command: Array<string>, shell: SshShell) => {
+export type EncodeShellCommandOptions = {
+  /** On Windows, run the command in the SSH user's interactive desktop session if the SSH session itself is not interactive. */
+  desktopSession?: boolean
+}
+
+export const encodeShellCommand = (command: Array<string>, shell: SshShell, options: EncodeShellCommandOptions = {}) => {
   if (!command[0]) {
     throw new Error('Cannot run an empty command.')
   }
@@ -35,10 +44,16 @@ export const encodeShellCommand = (command: Array<string>, shell: SshShell) => {
     const escape = shell === 'fish' ? escapeFish : escapePosix
     return `exec ${command.map(argument => escape(argument)).join(' ')}`
   }
-  const powershell = `$ErrorActionPreference = 'Stop'; if ($PSVersionTable.PSVersion -lt [version]'7.3') { throw 'PowerShell 7.3 or newer is required for native argv preservation.' }; $PSNativeCommandArgumentPassing = 'Standard'; [Console]::InputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); & ${command.map(argument => escapePowershell(argument)).join(' ')}; exit $LASTEXITCODE`
+  const direct = `& ${command.map(argument => escapePowershell(argument)).join(' ')}; exit $LASTEXITCODE`
+  const powershell = `$ErrorActionPreference = 'Stop'; if ($PSVersionTable.PSVersion -lt [version]'7.3') { throw 'PowerShell 7.3 or newer is required for native argv preservation.' }; $PSNativeCommandArgumentPassing = 'Standard'; [Console]::InputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); ${options.desktopSession ? buildDesktopRelay(command, direct) : direct}`
   if (shell === 'powershell') {
     return powershell
   }
   // Only fixed ASCII syntax and base64 cross cmd.exe; argv are interpreted by modern PowerShell.
+  if (options.desktopSession) {
+    // The relay does not fit cmd.exe's 8191-character command line as UTF-16 base64, so it travels gzipped instead.
+    const compressed = gzipSync(powershell, {level: 9}).toString('base64')
+    return `pwsh.exe -NoLogo -NoProfile -NonInteractive -Command Invoke-Expression ([IO.StreamReader]::new([IO.Compression.GZipStream]::new([IO.MemoryStream]::new([Convert]::FromBase64String('${compressed}')), [IO.Compression.CompressionMode]::Decompress)).ReadToEnd())`
+  }
   return `pwsh.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(powershell, 'utf16le').toString('base64')}`
 }

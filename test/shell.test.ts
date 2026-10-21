@@ -1,4 +1,4 @@
-import type {InvocationResult, SshShell, TransportCommandOptions} from '#src/lib/remoteTarget/types.ts'
+import type {InvocationResult, SshShell, TransportCommandOptions, WindowsSession} from '#src/lib/remoteTarget/types.ts'
 
 import {expect, test} from 'bun:test'
 import {tmpdir} from 'node:os'
@@ -14,8 +14,11 @@ import RemoteTarget from '#src/main.ts'
 class ShellTransport extends SshTargetTransport {
   noRuntime = false
   readonly prefix: Array<string>
-  constructor(prefix: Array<string>) {
-    super({host: 'fixture'})
+  constructor(prefix: Array<string>, windowsSession?: WindowsSession) {
+    super({
+      host: 'fixture',
+      windowsSession,
+    })
     this.prefix = prefix
   }
   getArgv() {
@@ -60,6 +63,21 @@ test('shell encoding rejects NUL and an empty executable', () => {
     expect(() => encodeShellCommand(['echo', '\0'], shell)).toThrow('NUL')
     expect(() => encodeShellCommand([''], shell)).toThrow('empty command')
   }
+})
+test('desktop session relay fits through cmd.exe', () => {
+  const command = ['bun', '--eval', 'console.log(Bun.argv)', 'a b', '', '"quoted" & | < > ^ %PATH%']
+  const encoded = encodeShellCommand(command, 'cmd', {desktopSession: true})
+  expect(encoded.length).toBeLessThan(8191)
+  expect(encoded).not.toMatch(/["%&<>^|]/u)
+  expect(encodeShellCommand(command, 'posix', {desktopSession: true})).toBe(encodeShellCommand(command, 'posix'))
+  expect(encodeShellCommand(command, 'fish', {desktopSession: true})).toBe(encodeShellCommand(command, 'fish'))
+})
+test('SSH transport rejects unknown Windows sessions', () => {
+  expect(() => new SshTargetTransport({
+    host: 'fixture',
+    windowsSession: 'console' as WindowsSession,
+  })).toThrow('Unsupported Windows session')
+  expect(new SshTargetTransport({host: 'fixture'}).windowsSession).toBe('desktop')
 })
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'sh'
 const shells: Array<{
@@ -129,5 +147,30 @@ for (const shell of shells) {
     expect(result.exitCode).toBe(0)
     expect(JSON.parse(result.stdout!)).toEqual(['', 'two words', "a'b", '\u{2019}'])
     expect(target.getDiscovery().runtimes).toEqual([])
+  })
+  test.skipIf(!available || !['cmd', 'powershell'].includes(shell.name))(`${shell.name}: desktop session relay preserves stdin, streams and exit code`, async () => {
+    const script = 'const {execFileSync} = require("node:child_process"); const session = execFileSync("pwsh", ["-NoLogo", "-NoProfile", "-Command", "(Get-Process -Id $PID).SessionId"]).toString().trim(); console.log(JSON.stringify({args: Bun.argv.slice(1), session, stdin: await Bun.stdin.text()})); console.error("warning \u{2192}"); process.exit(7)'
+    const results = {} as Record<WindowsSession, InvocationResult>
+    for (const windowsSession of ['desktop', 'ssh'] as const) {
+      results[windowsSession] = await new ShellTransport(shell.prefix, windowsSession).runShellNeutralCommand([process.execPath, '--eval', script, '', 'two words'], {
+        stdin: 'input \u{1F9D9}',
+        timeoutMs: 30_000,
+      })
+    }
+    for (const result of Object.values(results)) {
+      expect(result.exitCode).toBe(7)
+      expect(result.stderr).toBe('warning \u{2192}\n')
+      const output = JSON.parse(result.stdout!) as {
+        args: Array<string>
+        stdin: string
+      }
+      expect(output.args).toEqual(['', 'two words'])
+      expect(output.stdin).toBe('input \u{1F9D9}')
+    }
+    const sshSession = (JSON.parse(results.ssh.stdout!) as {session: string}).session
+    const desktopSession = (JSON.parse(results.desktop.stdout!) as {session: string}).session
+    if (sshSession !== '0') {
+      expect(desktopSession).toBe(sshSession)
+    }
   })
 }

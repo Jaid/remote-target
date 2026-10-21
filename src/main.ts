@@ -1,4 +1,4 @@
-import type {DiscoveryInfo, ExecResult, InvocationOptions, RemoteTargetAssumptions, RemoteTargetConstructorOptions, RemoteTargetInput, RemoteTargetOptions, RunInput, RunInvocationOptions, RunResult, RuntimeInfo, RuntimeName, SshShell} from './lib/remoteTarget/types.ts'
+import type {DiscoveryInfo, ExecResult, InvocationOptions, RemoteTargetAssumptions, RemoteTargetConstructorOptions, RemoteTargetInput, RemoteTargetOptions, RunInput, RunInvocationOptions, RunResult, RuntimeInfo, RuntimeName, SshShell, WindowsSession} from './lib/remoteTarget/types.ts'
 import type {TargetTransport} from './lib/transport/base/TargetTransport.ts'
 
 import {enforceForwardSlashes} from 'forward-slash-path'
@@ -83,6 +83,7 @@ const optionsSchema = optis({
     strictHostKeyChecking: undefined as 'accept-new' | 'yes' | undefined,
     transport: undefined as TargetTransport | undefined,
     user: undefined as string | undefined,
+    windowsSession: undefined as WindowsSession | undefined,
   },
   required: {host: ''},
 })

@@ -1,4 +1,4 @@
-import type {InvocationResult, RemoteTargetOptions, ShellInfo, SshShell, TransportCommandOptions} from '../remoteTarget/types.ts'
+import type {InvocationResult, RemoteTargetOptions, ShellInfo, SshShell, TransportCommandOptions, WindowsSession} from '../remoteTarget/types.ts'
 
 import makeArgv from 'make-argv'
 
@@ -8,7 +8,7 @@ import {runProcess} from '../remoteTarget/runProcess.ts'
 import {TargetTransport} from './base/TargetTransport.ts'
 import {encodeShellCommand} from './encodeShellCommand.ts'
 
-export type SshTargetTransportOptions = Pick<RemoteTargetOptions, 'host' | 'keyFile' | 'knownHostsFile' | 'port' | 'sshConfigFile' | 'sshOptions' | 'sshShell' | 'strictHostKeyChecking' | 'user'>
+export type SshTargetTransportOptions = Pick<RemoteTargetOptions, 'host' | 'keyFile' | 'knownHostsFile' | 'port' | 'sshConfigFile' | 'sshOptions' | 'sshShell' | 'strictHostKeyChecking' | 'user' | 'windowsSession'>
 
 export class SshTargetTransport extends TargetTransport {
   readonly destination: string
@@ -16,6 +16,7 @@ export class SshTargetTransport extends TargetTransport {
   readonly keyFile?: string
   readonly port?: number
   readonly user?: string
+  readonly windowsSession: WindowsSession
   readonly #options: SshTargetTransportOptions
   #shell?: SshShell
   #shellPromise?: Promise<SshShell>
@@ -28,6 +29,10 @@ export class SshTargetTransport extends TargetTransport {
     this.keyFile = options.keyFile
     this.port = options.port
     this.user = options.user
+    this.windowsSession = options.windowsSession ?? 'desktop'
+    if (!['desktop', 'ssh'].includes(this.windowsSession)) {
+      throw new TypeError(`Unsupported Windows session: ${this.windowsSession}`)
+    }
     if (options.sshShell !== undefined && !['cmd', 'fish', 'posix', 'powershell'].includes(options.sshShell)) {
       throw new TypeError(`Unsupported SSH shell: ${options.sshShell}`)
     }
@@ -70,7 +75,7 @@ export class SshTargetTransport extends TargetTransport {
       throw new TypeError('Expected a non-empty command without NUL arguments.')
     }
     const shell = this.#shell ?? await deadline.wait(this.resolveShell())
-    const source = encodeShellCommand(command, shell)
+    const source = encodeShellCommand(command, shell, {desktopSession: this.windowsSession === 'desktop'})
     const result = await this.runSsh(source, this.createChunkEmitter(command, {
       ...options,
       ...deadline.options(),

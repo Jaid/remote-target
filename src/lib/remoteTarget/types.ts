@@ -3,6 +3,8 @@ import type tinyhand from 'tinyhand'
 
 export type SshShell = 'cmd' | 'fish' | 'posix' | 'powershell'
 
+export type WindowsSession = 'desktop' | 'ssh'
+
 export type RuntimeName = 'bun' | 'deno' | 'node'
 
 export type ShellName = 'bash' | 'cmd' | 'fish' | 'powershell' | 'sh' | 'unknown' | 'zsh'
@@ -85,6 +87,8 @@ export type RemoteTargetOptions = {
   strictHostKeyChecking?: 'accept-new' | 'yes'
   transport?: TargetTransport
   user?: string
+  /** Where commands run on Windows SSH targets. `desktop` hands them to the SSH user's interactive desktop session if there is one, `ssh` keeps them in the non-interactive SSH session. Defaults to `desktop`. */
+  windowsSession?: WindowsSession
 }
 
 export type RemoteTargetConstructorOptions = Omit<Partial<RemoteTargetOptions>, 'host'>
