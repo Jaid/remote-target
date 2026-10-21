@@ -30,19 +30,19 @@
     "optis": "0.3.0",
     "serialize-javascript": "7.1.2",
     "tinyhand": "0.2.0",
-    "@babel/core": "8.0.6",
+    "@babel/core": "8.0.7",
     "@babel/plugin-transform-react-jsx": "8.0.1",
-    "@babel/plugin-transform-typescript": "8.0.5"
+    "@babel/plugin-transform-typescript": "8.0.6"
   },
   "devDependencies": {
-    "eslint": "10.11.0",
-    "eslint-config-jaid": "34.0.0",
+    "eslint": "10.13.0",
+    "eslint-config-jaid": "37.1.0",
     "fs-extra": "11.4.1",
     "make-ssh-keys": "1.0.1",
     "tsconfig-jaid-bun": "16.0.0",
     "typescript": "npm:typescript-classic@6.0.4",
     "zeug": "2.1.0",
-    "@types/bun": "1.4.2",
+    "@types/bun": "1.4.3",
     "@types/serialize-javascript": "5.0.4"
   },
   "engines": {
